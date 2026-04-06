@@ -4,31 +4,42 @@ using HarmonyLib;
 namespace KK_ZaWarudo
 {
     /// <summary>
-    /// Harmony patches that capture HSceneProc state so TimeStopController has
-    /// the references it needs (female/male ChaControls, HFlag, etc).
+    /// Harmony patches.
+    /// MapSameObjectDisable is the canonical late-init hook used by KK_HSceneOptions
+    /// (originally from KK_EyeShaking) — by then HSceneProc has populated lstFemale/male/flags.
     /// </summary>
     internal static class Hooks
     {
-        [HarmonyPostfix, HarmonyPatch(typeof(HSceneProc), nameof(HSceneProc.SetStartVoice))]
-        private static void OnHSceneStart(HSceneProc __instance)
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(HSceneProc), "MapSameObjectDisable")]
+        private static void HSceneInitPost(HSceneProc __instance)
         {
-            // SetStartVoice runs once after HSceneProc has populated lstFemale/male.
-            var females = (List<ChaControl>)AccessTools
-                .Field(typeof(HSceneProc), "lstFemale").GetValue(__instance);
-            var male = (ChaControl)AccessTools
-                .Field(typeof(HSceneProc), "male").GetValue(__instance);
-            var flags = (HFlag)AccessTools
-                .Field(typeof(HSceneProc), "flags").GetValue(__instance);
+            var trav = Traverse.Create(__instance);
+            var females = trav.Field("lstFemale").GetValue<List<ChaControl>>();
+            var male = trav.Field("male").GetValue<ChaControl>();
+            var flags = __instance.flags;
 
             TimeStopController.Bind(__instance, females, male, flags);
-            Plugin.Logger.LogDebug("HScene bound to TimeStopController.");
+            Plugin.Log.LogDebug("HScene bound to TimeStopController.");
         }
 
-        [HarmonyPostfix, HarmonyPatch(typeof(HSceneProc), "OnDestroy")]
-        private static void OnHSceneEnd()
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(HSceneProc), "OnDestroy")]
+        private static void HSceneEndPost()
         {
             TimeStopController.Unbind();
-            Plugin.Logger.LogDebug("HScene unbound from TimeStopController.");
+            Plugin.Log.LogDebug("HScene unbound.");
+        }
+
+        /// <summary>
+        /// Re-apply freeze on partner-switch / position-change so the newly active
+        /// female does not animate while time is stopped.
+        /// </summary>
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(HSceneProc), "ChangeAnimator")]
+        private static void ChangeAnimatorPost()
+        {
+            TimeStopController.Instance?.ReapplyIfFrozen();
         }
     }
 }
