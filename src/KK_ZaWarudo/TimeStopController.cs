@@ -6,13 +6,17 @@ namespace KK_ZaWarudo
     /// <summary>
     /// Owns the freeze/resume logic per docs/SPEC.md.
     /// Strategy:
-    ///   1. Animator.speed = 0 on every female ChaControl's animBody/animFace/animOption.
-    ///      Male (= player) is left untouched.
+    ///   1. Animator.speed = 0 on every frozen subject's animBody + animTongueEx.
+    ///      (ChaInfo only exposes those two Animators — verified against
+    ///      Koikatu_Data/Managed/Assembly-CSharp.dll. There is no animFace.)
+    ///      Male protagonist (HSceneProc.male) is left untouched.
     ///   2. HFlag.speedCalc = 0 to halt the gauge tick.
-    ///   3. Cache + disable DynamicBone / DynamicBone_Ver02 components on females.
+    ///   3. Cache + disable DynamicBone / DynamicBone_Ver02 components on subjects.
     ///   4. Pause every ParticleSystem under the HScene root.
-    ///   5. AudioListener.pause stays alone — voice handled per HVoiceCtrl below if needed.
-    ///   6. Play Enter SFX. On resume play Resume SFX and inject gauge.
+    ///   4b. Stop in-flight voice via Manager.Voice.Instance.Stop(transVoiceMouth).
+    ///   4c. Pause every AudioSource on every frozen subject (covers 3P/4P
+    ///       and any voice/SE that 4b missed).
+    ///   5. Play Enter SFX. On resume play Resume SFX and inject gauge.
     /// All mutated state is cached for clean restore.
     /// </summary>
     internal class TimeStopController
@@ -22,7 +26,10 @@ namespace KK_ZaWarudo
         private HSceneProc _proc;
         private List<ChaControl> _females;
         // _male = protagonist, intentionally untouched per spec.
-        private List<ChaControl> _extraMales; // male1 (darkness) + KPlug additions
+        // _extraMales currently sourced from HSceneProc.male1 only (darkness mode).
+        // Vanilla HSceneProc has exactly two ChaControl male slots (male, male1) —
+        // verified against Koikatu_Data/Managed/Assembly-CSharp.dll.
+        private List<ChaControl> _extraMales;
         private HFlag _flags;
 
         /// <summary>Everyone who SHOULD be frozen: females + non-protagonist males.</summary>
@@ -187,7 +194,10 @@ namespace KK_ZaWarudo
 
         /// <summary>
         /// Called from HSceneProc.ChangeAnimator postfix when frozen — re-pin
-        /// the new animators / bones / particles since the active set may have shifted.
+        /// EVERY freeze step on the (possibly new) active set: animators, bones,
+        /// particles, the in-flight voice slots, and any AudioSources that just
+        /// started playing on the new partner. The HashSet caches dedupe so this
+        /// is safe to call repeatedly.
         /// </summary>
         public void ReapplyIfFrozen()
         {
@@ -195,6 +205,8 @@ namespace KK_ZaWarudo
             FreezeFemaleAnimators();
             FreezeFemaleBones();
             FreezeParticles();
+            StopFemaleVoices();    // re-stop voice slots — new partner may have new mouth bindings
+            FreezeFemaleAudio();   // catches any AudioSource that started playing during the switch
             if (_flags != null) _flags.speedCalc = 0f;
         }
 
@@ -202,11 +214,14 @@ namespace KK_ZaWarudo
 
         private void FreezeFemaleAnimators()
         {
+            // ChaInfo exposes exactly these two Animators in vanilla KK.
+            // animFace does NOT exist (verified via ilspy on Koikatu_Data/Managed/Assembly-CSharp.dll
+            // and on the IllusionLibs NuGet stub at .../illusionlibs.koikatu.assembly-csharp/2019.4.27.4).
+            // Don't add reflection lookups for "animFace" / "animOption" — they're a no-op and waste time.
             foreach (var c in FrozenSubjects())
             {
                 CacheAndZero(c.animBody);
-                var face = c.GetType().GetField("animFace")?.GetValue(c) as Animator;
-                CacheAndZero(face);
+                CacheAndZero(c.animTongueEx);
             }
         }
 

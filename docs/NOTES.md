@@ -39,6 +39,45 @@
 
 ---
 
+### B5 — `animFace` 反射查找永遠回傳 null,臉/舌頭動畫不被凍結 (collaborator AI 稽核發現)
+**症狀**: 時停時臉部表情、舌頭動畫繼續演,只有身體靜止。
+
+**原因**: 我之前憑印象寫 `c.GetType().GetField("animFace")?.GetValue(c) as Animator`,以為 `ChaControl` 有 `animFace` 欄位。實際上 ChaInfo (ChaControl 的父類) 只有兩個 Animator 屬性:`animBody` 和 `animTongueEx`,**沒有** `animFace`。反射查找永遠回 null,等於什麼都沒做。
+
+**驗證**: 用 ilspy 對 `Koikatu_Data/Managed/Assembly-CSharp.dll` 跟 IllusionLibs NuGet stub `illusionlibs.koikatu.assembly-csharp/2019.4.27.4` 都檢查過,確認 ChaInfo 只有:
+```csharp
+public Animator animBody { get; protected set; }
+public Animator animTongueEx { get; protected set; }
+```
+
+**修法**: 移除反射,直接寫 `CacheAndZero(c.animBody); CacheAndZero(c.animTongueEx);`,並在 method 上方加註解警告未來不要再加 `animFace`/`animOption` 反射查找。
+
+**教訓**: 不要憑記憶寫欄位名,**永遠** ilspy 一下實際的 dll。Spec/註解和實作分岔的成本很高 — 程式跑得過、log 看起來正常,但功能默默壞掉。
+
+---
+
+### B6 — `ReapplyIfFrozen` 漏掉 voice / audio steps (collaborator AI 稽核發現)
+**症狀**: 凍結中切體位或換對象後,新女角的 moan / mouth voice / 其他 AudioSource 會穿透凍結一路播到 resume。
+
+**原因**: `Freeze()` 走完 step 1 到 4c (animator + bone + particle + StopFemaleVoices + FreezeFemaleAudio),但 `ReapplyIfFrozen` 只重跑 step 1–4 (animator + bone + particle),漏了 4b 和 4c。
+
+**修法**: `ReapplyIfFrozen` 補上 `StopFemaleVoices()` 跟 `FreezeFemaleAudio()` 呼叫。HashSet cache (B3 修過) 會自動 dedupe,重複呼叫不會堆積。
+
+**教訓**: freeze 步驟新增/刪減時,**同步更新 ReapplyIfFrozen**。兩個方法的步驟順序與覆蓋集合必須鏡像。考慮把兩者抽成一個 `ApplyFreezeSteps()` helper 共用,避免再分岔 (TODO)。
+
+---
+
+### B7 — `_extraMales` 註解假造「KPlug additions」(collaborator AI 稽核發現)
+**症狀**: 註解寫 `_extraMales = male1 (darkness) + KPlug additions`,實際上 init 只抓 `male1` 一個欄位。spec/註解和實作分岔。
+
+**驗證**: ilspy 檢查 vanilla `HSceneProc`,只有兩個 ChaControl 男角欄位:`male` 跟 `male1`。沒有 `male2/male3/maleNpc`。
+
+**修法**: 改寫註解誠實描述目前能力 (`_extraMales currently sourced from HSceneProc.male1 only`)。要支援 KPlug 等 mod 額外男角時,得另外查那些 mod 用什麼欄位/容器、可能需要 hook 不同 class,**不是** 在 vanilla HSceneProc 上掃 male* 欄位就能解決。
+
+**教訓**: 不要在註解寫「未來擴充」式的虛構能力。註解寫的是 code 現在做什麼,不是 code 想做什麼。
+
+---
+
 ### B4 — Bind 沒有防重入,舊 Instance 會被無聲覆蓋 (稽核發現,commit `~`)
 **症狀**: 理論上不會觸發 — 需要 `MapSameObjectDisable` 在沒先 `OnDestroy` 的情況下 fire 兩次 (BepInEx hot reload、KKAPI re-init、或其他 plugin 強制重 init HScene)。一旦觸發,前一場的 cache 全部丟失,被 freeze 的 animator/bone **永遠停在 frozen 狀態**,直到下一次 Resume — 但下一次 Resume 看到的是新 Instance,iter 的是空 cache,什麼也救不回來。
 
@@ -61,17 +100,14 @@
 - **觸發條件**: 玩家視角實際綁的不是 `male` 而是某個女角時 (例如 darkness 模式女主視點 / 某些 mod 改視角),會凍住玩家自己
 - **預防**: 要支援時加 config `Untouched Character Index`,或從 KKAPI 抓 `currentActiveCharacter`
 
-### R3 — `male1` 欄位假設只在 darkness 存在
-- **嚴重度**: 低
-- **現況**: `Traverse.Field("male1").GetValue<ChaControl>()` 找不到欄位回傳 null,vanilla KK 不會 crash
-- **觸發條件**: KPlug / 其他 mod 用不同欄位名加額外男角 (`male2` `maleNpc` 等)
-- **預防**: 使用者跑 darkness 多人場景時若 log 看到 `extraMales=0`,需要查當前 KK 版本的真實欄位名再 patch hook
+### R3 — KPlug / 其他 mod 加的額外男角不會被凍結
+- **嚴重度**: 中
+- **現況**: 只抓 vanilla `HSceneProc.male1`,KPlug 若把額外男角放在別的 class/容器/runtime 注入,本 plugin 不會看到
+- **觸發條件**: 跑 KPlug 多男角場景,多出來的男配角持續正常動作
+- **預防**: 實機觀察到漏網時,要查 KPlug 原始碼確認額外男角的存放位置,可能要 hook 不同 class 而非 HSceneProc
 
-### R4 — `animFace` 用 reflection 拿
-- **嚴重度**: 低
-- **原因**: 不確定不同 KK 分支 (vanilla / Party / darkness / KKS — 雖然不支援) `ChaControl` 是否都有 `animFace` public 欄位
-- **現況**: `c.GetType().GetField("animFace")?.GetValue(c) as Animator` 找不到就回 null,不 crash
-- **預防**: 確認 vanilla KK 有後可改成直接 `c.animFace`
+### R4 — ~~`animFace` 用 reflection 拿~~ (已修,見 B5)
+~~此風險已不存在~~ — `animFace` 根本不存在於 ChaInfo,改直接抓 `animBody` + `animTongueEx`。
 
 ### R5 — `Manager.Voice.Instance.Stop(transVoiceMouth[i])` 只覆蓋當前主動 mouth slot
 - **嚴重度**: 低 (已用 step 4c `FreezeFemaleAudio` 補強)
@@ -100,3 +136,6 @@
 5. **男主角 (`HSceneProc.male`) 永遠不被加進凍結對象集合** — 寫死在 `FrozenSubjects()` 的設計裡,別誤改。
 6. **所有 log 帶 `ZAWA>` prefix** — 透過 `Plugin.LogI/LogW/LogE` 而不是 `Logger.LogInfo` 直接呼叫。方便 grep 跟其他 plugin 的 log 區分。
 7. **UnpatchSelf on OnDestroy** — Plugin.OnDestroy 必須 unpatch Harmony,否則 reload 時舊 patch 會疊上去。
+8. **不准憑記憶寫 KK API 欄位名** — 查 ilspy。`ChaInfo` 上的 Animator 只有 `animBody` 和 `animTongueEx`,沒有 `animFace`/`animOption`。`HSceneProc` 上的男角只有 `male`/`male1`。原因見 B5、B7。
+9. **`Freeze()` 步驟調整時必須同步更新 `ReapplyIfFrozen()`** — 兩者覆蓋的 step 集合必須鏡像,否則切體位/換對象後新 subjects 會漏網。原因見 B6。長期看應抽 helper 共用。
+10. **註解寫程式現在做什麼,不寫想做什麼** — 別在註解裡編造尚未實作的能力 (例: 「supports KPlug additions」),會誤導稽核者也誤導未來的自己。原因見 B7。
