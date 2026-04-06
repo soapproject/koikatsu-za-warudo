@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net46</TargetFramework>
+    <AssemblyName>KK_ZaWarudo</AssemblyName>
+    <RootNamespace>KK_ZaWarudo</RootNamespace>
+    <Version>0.1.0</Version>
+    <LangVersion>latest</LangVersion>
+    <NoWarn>CS0626;CS0649</NoWarn>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Description>JoJo "ZA WARUDO" time-stop for Koikatsu H-scenes</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Use IllusionLibs NuGet packages so a local KK install is not required to build -->
+    <PackageReference Include="IllusionLibs.BepInEx" Version="5.4.21" />
+    <PackageReference Include="IllusionLibs.BepInEx.Harmony" Version="2.9.0" />
+    <PackageReference Include="IllusionLibs.Koikatu.Assembly-CSharp" Version="2019.4.27" />
+    <PackageReference Include="IllusionLibs.Koikatu.Assembly-CSharp-firstpass" Version="2019.4.27" />
+    <PackageReference Include="IllusionLibs.Koikatu.UnityEngine" Version="5.6.2" />
+    <PackageReference Include="IllusionLibs.Koikatu.UnityEngine.UI" Version="5.6.2" />
+  </ItemGroup>
+
+</Project>

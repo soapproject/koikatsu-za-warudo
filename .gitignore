@@ -1,0 +1,9 @@
+# Reference repos (cloned for offline lookup, not part of this project)
+references/
+
+# Build output
+bin/
+obj/
+*.user
+*.suo
+.vs/
