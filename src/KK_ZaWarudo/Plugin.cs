@@ -96,6 +96,7 @@ namespace KK_ZaWarudo
                     new AcceptableValueRange<float>(0f, 1f)));
 
             _harmony = Harmony.CreateAndPatchAll(typeof(Hooks), GUID);
+            AudioManager.Instance.StartLoad();
             LogI($"{PluginName} {Version} loaded. Toggle={ToggleKey.Value} Mode={Mode.Value} Rate={AccumulationRate.Value} SfxFolder={SfxFolder.Value}");
         }
 

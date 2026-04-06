@@ -29,12 +29,8 @@ namespace KK_ZaWarudo
         private AudioClip _exit;
         private AudioClip _femaleResume;
 
-        // Cache keys so EnsureLoaded can detect config changes.
-        private string _cacheFolder;
-        private string _cacheEnter;
-        private string _cacheDuring;
-        private string _cacheExit;
-        private string _cacheFemale;
+        private bool _loaded;
+        private bool _loading;
 
         private void EnsureSource()
         {
@@ -47,49 +43,78 @@ namespace KK_ZaWarudo
             Plugin.LogI("AudioSource attached to plugin GameObject.");
         }
 
-        public void EnsureLoaded()
+        /// <summary>Kick off async load. Idempotent. Call from Plugin.Awake.</summary>
+        public void StartLoad()
         {
+            if (_loaded || _loading) return;
             EnsureSource();
-            var folder = Plugin.SfxFolder.Value;
-            var e = Plugin.EnterSfxFile.Value;
-            var d = Plugin.DuringSfxFile.Value;
-            var x = Plugin.ExitSfxFile.Value;
-            var fr = Plugin.FemaleResumeSfxFile.Value;
-
-            if (folder != _cacheFolder || e != _cacheEnter)        { _enter = TryLoad(Path.Combine(folder, e));  _cacheEnter = e; }
-            if (folder != _cacheFolder || d != _cacheDuring)       { _during = TryLoad(Path.Combine(folder, d)); _cacheDuring = d; }
-            if (folder != _cacheFolder || x != _cacheExit)         { _exit = TryLoad(Path.Combine(folder, x));   _cacheExit = x; }
-            if (folder != _cacheFolder || fr != _cacheFemale)      { _femaleResume = TryLoad(Path.Combine(folder, fr)); _cacheFemale = fr; }
-            _cacheFolder = folder;
-
-            Plugin.LogI($"SFX loaded: enter={_enter != null} during={_during != null} exit={_exit != null} femaleResume={_femaleResume != null}");
+            if (Plugin.Instance == null) return;
+            _loading = true;
+            Plugin.Instance.StartCoroutine(LoadAllAsync());
         }
 
-        private static AudioClip TryLoad(string path)
+        private IEnumerator LoadAllAsync()
+        {
+            var folder = NormalizeFolder(Plugin.SfxFolder.Value);
+            Plugin.LogI($"AudioManager.LoadAllAsync from: {folder}");
+
+            yield return LoadOne(Path.Combine(folder, Plugin.EnterSfxFile.Value),       c => _enter = c,        "enter");
+            yield return LoadOne(Path.Combine(folder, Plugin.DuringSfxFile.Value),      c => _during = c,       "during");
+            yield return LoadOne(Path.Combine(folder, Plugin.ExitSfxFile.Value),        c => _exit = c,         "exit");
+            yield return LoadOne(Path.Combine(folder, Plugin.FemaleResumeSfxFile.Value),c => _femaleResume = c, "femaleResume");
+
+            _loading = false;
+            _loaded = true;
+            Plugin.LogI($"SFX load done: enter={Describe(_enter)} during={Describe(_during)} exit={Describe(_exit)} femaleResume={Describe(_femaleResume)}");
+        }
+
+        private static string Describe(AudioClip c) => c == null ? "null" : $"{c.name}({c.length:F2}s)";
+
+        private static string NormalizeFolder(string folder)
+        {
+            // Config may have mixed slashes from Path.Combine + raw default. Normalize for Uri.
+            return folder.Replace('/', Path.DirectorySeparatorChar);
+        }
+
+        private static IEnumerator LoadOne(string path, Action<AudioClip> assign, string label)
         {
             if (string.IsNullOrEmpty(path) || !File.Exists(path))
             {
-                Plugin.LogW($"SFX missing, skipping: {path}");
-                return null;
+                Plugin.LogW($"SFX missing [{label}]: {path}");
+                yield break;
             }
-            Plugin.LogI($"Loading SFX: {path}");
+            Plugin.LogI($"Loading SFX [{label}]: {path}");
+            string uri;
+            try { uri = new Uri(path).AbsoluteUri; }
+            catch (Exception e) { Plugin.LogW($"  uri build failed: {e.Message}"); yield break; }
+
+            var www = new WWW(uri);
+            // Yielding WWW lets the main thread pump it to completion.
+            yield return www;
+
+            if (!string.IsNullOrEmpty(www.error))
+            {
+                Plugin.LogW($"  WWW error [{label}]: {www.error}");
+                www.Dispose();
+                yield break;
+            }
+
+            AudioClip clip = null;
             try
             {
-                var uri = new Uri(path).AbsoluteUri;
-                var www = new WWW(uri);
-                try
-                {
-                    var clip = WWWAudioExtensions.GetAudioClipCompressed(www, false, AudioType.WAV);
-                    int guard = 0;
-                    while (clip != null && clip.loadState != AudioDataLoadState.Loaded && guard++ < 10000) { }
-                    return clip;
-                }
-                finally { www.Dispose(); }
+                clip = WWWAudioExtensions.GetAudioClip(www, false, false, AudioType.WAV);
             }
             catch (Exception e)
             {
-                Plugin.LogW($"Failed loading {path}: {e.Message}");
-                return null;
+                Plugin.LogW($"  GetAudioClip failed [{label}]: {e.Message}");
+            }
+            finally { www.Dispose(); }
+
+            if (clip != null)
+            {
+                clip.name = label;
+                assign(clip);
+                Plugin.LogI($"  loaded [{label}]: {clip.length:F2}s, samples={clip.samples}");
             }
         }
 
@@ -97,15 +122,14 @@ namespace KK_ZaWarudo
 
         public void PlayFreezeSequence()
         {
-            EnsureLoaded();
             if (_source == null || Plugin.Instance == null) return;
+            if (!_loaded) Plugin.LogW("PlayFreezeSequence: clips not loaded yet (race?)");
             CancelRunning("PlayFreezeSequence");
             _running = Plugin.Instance.StartCoroutine(FreezeRoutine());
         }
 
         public void PlayResumeSequence()
         {
-            EnsureLoaded();
             if (_source == null || Plugin.Instance == null) return;
             CancelRunning("PlayResumeSequence");
             _running = Plugin.Instance.StartCoroutine(ResumeRoutine());
