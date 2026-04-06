@@ -159,3 +159,46 @@
 9. **`Freeze()` 步驟調整時必須同步更新 `ReapplyIfFrozen()`** — 兩者覆蓋的 step 集合必須鏡像,否則切體位/換對象後新 subjects 會漏網。原因見 B6。長期看應抽 helper 共用。
 10. **註解寫程式現在做什麼,不寫想做什麼** — 別在註解裡編造尚未實作的能力 (例: 「supports KPlug additions」),會誤導稽核者也誤導未來的自己。原因見 B7。
 11. **Collaborator AI / 外部建議要交叉驗證** — 對方指出的「問題」可能是真的,但他提出的「修法」可能基於部分證據。永遠用 ilspy + reference plugin grep + 整個 assembly 的使用情境再驗一次。原因見 B5 第二輪查證。
+
+---
+
+## 開發工具 / Workflow
+
+### 反編譯 KK runtime dll
+KK 安裝目錄底下所有 dll 都可以直接 decompile 來研究 — 不只 `Koikatu_Data/Managed/Assembly-CSharp.dll`,連 `BepInEx/plugins/*.dll` (其他人的 plugin) 也可以。這是查 KK API、學別人實作模式、找未知欄位的**最直接證據來源**,優先級高於 NuGet stub 跟 reference repo。
+
+**安裝 ilspycmd** (一次):
+```bash
+dotnet tool install -g ilspycmd --version 8.2.0.7535
+```
+注意:`latest` 版本目前 NuGet 套件 broken,要 pin `8.2.0.7535`。原因見 [b4 install attempt history]。
+
+**Decompile 一個 type**:
+```bash
+/c/Users/weiss/.dotnet/tools/ilspycmd \
+  "/c/Program Files (x86)/Steam/steamapps/common/Koikatsu/Koikatu_Data/Managed/Assembly-CSharp.dll" \
+  -t HSceneProc > /tmp/hsceneproc.cs
+```
+
+**Decompile 整個 dll** (慢,但可以 grep 任何欄位的全局使用):
+```bash
+/c/Users/weiss/.dotnet/tools/ilspycmd \
+  "/c/Program Files (x86)/Steam/steamapps/common/Koikatsu/Koikatu_Data/Managed/Assembly-CSharp.dll" \
+  > /tmp/full_asm.cs
+grep -n "animTongueEx\|gaugeFemale\|whatever" /tmp/full_asm.cs
+```
+
+**重要 dll 路徑**:
+- `Koikatu_Data/Managed/Assembly-CSharp.dll` — 主遊戲邏輯 (HSceneProc, ChaControl, HFlag, Manager.* 等)
+- `Koikatu_Data/Managed/Assembly-CSharp-firstpass.dll` — UnityEngine extensions, DynamicBone 等
+- `BepInEx/core/BepInEx.dll` — BepInEx API
+- `BepInEx/plugins/*.dll` — 其他人的 plugin (學模式、找 hook 點)
+
+別人的 plugin 已經 commit 過的可以放到 `references/`,沒有原始碼的就 decompile 後放到 `references/<name>/<name>.decompiled.cs` (見 [SlapMod 的 case](../references/SlapMod/SlapMod.decompiled.cs))。
+
+### 查證流程 (任何懷疑 KK API 行為時)
+1. **ilspy 真實 game dll** — 第一手證據,類別實際長相
+2. **ilspy 想看的 type 用 `-t TypeName`** — 看單一類別的成員、欄位、方法簽名
+3. **whole-assembly grep** — 看某個欄位/方法在遊戲內被誰呼叫、被怎麼用,辨別「存在但沒被使用」vs「真的有作用」
+4. **reference plugin grep** (`references/`) — 看別人怎麼用同樣的 API,有沒有踩過坑的註解
+5. 上面 1–4 都通才相信
