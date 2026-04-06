@@ -1,7 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net46</TargetFramework>
+    <!-- KK runs on Unity 5.6 mono (.NET 3.5 era). Targeting net35 matches every other
+         KK plugin (KK_HSceneOptions etc.) and avoids the compiler emitting calls to
+         Array.Empty<T>() which only exists in .NET 4.6+. -->
+    <TargetFramework>net35</TargetFramework>
     <AssemblyName>KK_ZaWarudo</AssemblyName>
     <RootNamespace>KK_ZaWarudo</RootNamespace>
     <Version>0.1.0</Version>
