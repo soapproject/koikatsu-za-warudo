@@ -32,6 +32,7 @@ namespace KK_ZaWarudo
         private readonly Dictionary<Animator, float> _animSpeeds = new Dictionary<Animator, float>();
         private readonly List<Behaviour> _disabledBones = new List<Behaviour>();
         private readonly List<ParticleSystem> _pausedParticles = new List<ParticleSystem>();
+        private readonly List<AudioSource> _pausedAudio = new List<AudioSource>();
         private float _savedSpeedCalc;
 
         public static void Bind(HSceneProc proc, List<ChaControl> females, ChaControl male, HFlag flags)
@@ -99,6 +100,10 @@ namespace KK_ZaWarudo
             // 4b. Stop in-flight female voice (KK_HSceneOptions ForceStopVoice pattern)
             StopFemaleVoices();
 
+            // 4c. Pause every AudioSource on every female ChaControl (covers 3P/4P
+            //     where transVoiceMouth only includes the active partner).
+            FreezeFemaleAudio();
+
             // 5. SFX — Enter then During (loop)
             try { AudioManager.Instance.PlayFreezeSequence(); }
             catch (System.Exception e) { Plugin.LogW($"Freeze SFX sequence failed: {e}"); }
@@ -135,6 +140,14 @@ namespace KK_ZaWarudo
             }
             _pausedParticles.Clear();
             Plugin.LogI($"  resumed particles={restoredParticles}");
+
+            int restoredAudio = 0;
+            foreach (var a in _pausedAudio)
+            {
+                if (a != null) { a.UnPause(); restoredAudio++; }
+            }
+            _pausedAudio.Clear();
+            Plugin.LogI($"  unpaused audio sources={restoredAudio}");
 
             if (_flags != null)
             {
@@ -209,6 +222,24 @@ namespace KK_ZaWarudo
                     _disabledBones.Add(b);
                 }
             }
+        }
+
+        private void FreezeFemaleAudio()
+        {
+            if (_females == null) return;
+            int paused = 0;
+            foreach (var f in _females)
+            {
+                if (f == null) continue;
+                foreach (var src in f.GetComponentsInChildren<AudioSource>(true))
+                {
+                    if (src == null || !src.isPlaying) continue;
+                    src.Pause();
+                    _pausedAudio.Add(src);
+                    paused++;
+                }
+            }
+            Plugin.LogI($"  step4c female AudioSources paused={paused}");
         }
 
         private void StopFemaleVoices()
