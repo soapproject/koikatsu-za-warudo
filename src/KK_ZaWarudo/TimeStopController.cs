@@ -21,8 +21,16 @@ namespace KK_ZaWarudo
 
         private HSceneProc _proc;
         private List<ChaControl> _females;
-        // _male intentionally not stored — male = player, untouched per spec.
+        // _male = protagonist, intentionally untouched per spec.
+        private List<ChaControl> _extraMales; // male1 (darkness) + KPlug additions
         private HFlag _flags;
+
+        /// <summary>Everyone who SHOULD be frozen: females + non-protagonist males.</summary>
+        private IEnumerable<ChaControl> FrozenSubjects()
+        {
+            if (_females != null) foreach (var f in _females) if (f != null) yield return f;
+            if (_extraMales != null) foreach (var m in _extraMales) if (m != null) yield return m;
+        }
 
         private bool _frozen;
         public bool IsFrozen => _frozen;
@@ -35,14 +43,15 @@ namespace KK_ZaWarudo
         private readonly List<AudioSource> _pausedAudio = new List<AudioSource>();
         private float _savedSpeedCalc;
 
-        public static void Bind(HSceneProc proc, List<ChaControl> females, ChaControl male, HFlag flags)
+        public static void Bind(HSceneProc proc, List<ChaControl> females, ChaControl male, List<ChaControl> extraMales, HFlag flags)
         {
-            // male reference accepted for API symmetry but not stored — left untouched per spec.
+            // male = protagonist, untouched per spec.
             _ = male;
             Instance = new TimeStopController
             {
                 _proc = proc,
                 _females = females,
+                _extraMales = extraMales,
                 _flags = flags,
             };
         }
@@ -182,13 +191,10 @@ namespace KK_ZaWarudo
 
         private void FreezeFemaleAnimators()
         {
-            if (_females == null) return;
-            foreach (var f in _females)
+            foreach (var c in FrozenSubjects())
             {
-                if (f == null) continue;
-                CacheAndZero(f.animBody);
-                // animFace / animOption may not exist on every build — guard via reflection-friendly null checks
-                var face = f.GetType().GetField("animFace")?.GetValue(f) as Animator;
+                CacheAndZero(c.animBody);
+                var face = c.GetType().GetField("animFace")?.GetValue(c) as Animator;
                 CacheAndZero(face);
             }
         }
@@ -203,19 +209,15 @@ namespace KK_ZaWarudo
 
         private void FreezeFemaleBones()
         {
-            if (_females == null) return;
-            foreach (var f in _females)
+            foreach (var c in FrozenSubjects())
             {
-                if (f == null) continue;
-                // DynamicBone (v1)
-                foreach (var b in f.GetComponentsInChildren<DynamicBone>(true))
+                foreach (var b in c.GetComponentsInChildren<DynamicBone>(true))
                 {
                     if (b == null || !b.enabled) continue;
                     b.enabled = false;
                     _disabledBones.Add(b);
                 }
-                // DynamicBone_Ver02
-                foreach (var b in f.GetComponentsInChildren<DynamicBone_Ver02>(true))
+                foreach (var b in c.GetComponentsInChildren<DynamicBone_Ver02>(true))
                 {
                     if (b == null || !b.enabled) continue;
                     b.enabled = false;
@@ -226,12 +228,10 @@ namespace KK_ZaWarudo
 
         private void FreezeFemaleAudio()
         {
-            if (_females == null) return;
             int paused = 0;
-            foreach (var f in _females)
+            foreach (var c in FrozenSubjects())
             {
-                if (f == null) continue;
-                foreach (var src in f.GetComponentsInChildren<AudioSource>(true))
+                foreach (var src in c.GetComponentsInChildren<AudioSource>(true))
                 {
                     if (src == null || !src.isPlaying) continue;
                     src.Pause();
@@ -239,7 +239,7 @@ namespace KK_ZaWarudo
                     paused++;
                 }
             }
-            Plugin.LogI($"  step4c female AudioSources paused={paused}");
+            Plugin.LogI($"  step4c subject AudioSources paused={paused}");
         }
 
         private void StopFemaleVoices()
