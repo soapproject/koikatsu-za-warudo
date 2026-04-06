@@ -214,10 +214,20 @@ namespace KK_ZaWarudo
 
         private void FreezeFemaleAnimators()
         {
-            // ChaInfo exposes exactly these two Animators in vanilla KK.
-            // animFace does NOT exist (verified via ilspy on Koikatu_Data/Managed/Assembly-CSharp.dll
-            // and on the IllusionLibs NuGet stub at .../illusionlibs.koikatu.assembly-csharp/2019.4.27.4).
-            // Don't add reflection lookups for "animFace" / "animOption" — they're a no-op and waste time.
+            // ChaInfo exposes exactly two Animators: animBody and animTongueEx.
+            // animFace / animOption do NOT exist (ilspy-verified against:
+            //   - Koikatu_Data/Managed/Assembly-CSharp.dll
+            //   - illusionlibs.koikatu.assembly-csharp/2019.4.27.4 NuGet stub
+            //   - cross-checked with KK_HSceneOptions / KK_Plugins / IllusionModdingAPI sources)
+            //
+            // animBody is the canonical HScene animator that every reference plugin
+            // (KK_HSceneOptions etc.) freezes. Setting its speed=0 stops body anim,
+            // its layered face anim, AnimationEvents (lip-sync, blinks).
+            //
+            // animTongueEx exists on ChaInfo but the game never calls .speed/.Play/etc
+            // on it — only assigns it once from objTongueEx.GetComponent<Animator>().
+            // Freezing it is therefore a no-op in practice, but kept here as a cheap
+            // belt-and-braces against a future game patch that might start driving it.
             foreach (var c in FrozenSubjects())
             {
                 CacheAndZero(c.animBody);

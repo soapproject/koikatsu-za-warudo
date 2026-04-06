@@ -39,20 +39,39 @@
 
 ---
 
-### B5 — `animFace` 反射查找永遠回傳 null,臉/舌頭動畫不被凍結 (collaborator AI 稽核發現)
-**症狀**: 時停時臉部表情、舌頭動畫繼續演,只有身體靜止。
+### B5 — `animFace` 反射查找永遠回傳 null (collaborator AI 稽核發現,自行交叉驗證後微調結論)
+**症狀**: collaborator 報告「臉/舌頭動畫不被凍結」。
 
-**原因**: 我之前憑印象寫 `c.GetType().GetField("animFace")?.GetValue(c) as Animator`,以為 `ChaControl` 有 `animFace` 欄位。實際上 ChaInfo (ChaControl 的父類) 只有兩個 Animator 屬性:`animBody` 和 `animTongueEx`,**沒有** `animFace`。反射查找永遠回 null,等於什麼都沒做。
+**第一輪查證 (collaborator AI 主張)**: ChaInfo 上沒有 `animFace`,只有 `animBody` 和 `animTongueEx`。
 
-**驗證**: 用 ilspy 對 `Koikatu_Data/Managed/Assembly-CSharp.dll` 跟 IllusionLibs NuGet stub `illusionlibs.koikatu.assembly-csharp/2019.4.27.4` 都檢查過,確認 ChaInfo 只有:
-```csharp
-public Animator animBody { get; protected set; }
-public Animator animTongueEx { get; protected set; }
-```
+**第二輪交叉驗證**: 不能無腦相信單一來源。我又查了:
+1. ilspy 對 `Koikatu_Data/Managed/Assembly-CSharp.dll`:確認 ChaInfo 只有
+   ```csharp
+   public Animator animBody { get; protected set; }
+   public Animator animTongueEx { get; protected set; }
+   ```
+2. ilspy 對 IllusionLibs NuGet stub (`illusionlibs.koikatu.assembly-csharp/2019.4.27.4`):一致
+3. KK_HSceneOptions 整個 codebase grep:只看到一處 `animBody.GetCurrentAnimatorStateInfo`,完全沒碰其他 anim*
+4. KK_Plugins、IllusionModdingAPI:0 hits,沒人碰任何 anim* 欄位
+5. **whole-assembly grep `animTongueEx`**: 只有 3 處 reference
+   - 屬性宣告
+   - `objTongueEx.GetComponent<Animator>()` 賦值一次
+   - cleanup 設 null
 
-**修法**: 移除反射,直接寫 `CacheAndZero(c.animBody); CacheAndZero(c.animTongueEx);`,並在 method 上方加註解警告未來不要再加 `animFace`/`animOption` 反射查找。
+**修正後的結論**:
+- ✅ collaborator 對的部分:`animFace` 不存在,反射查找是 no-op,我之前的 code 等於什麼都沒做
+- ⚠️ collaborator 誤導的部分:他建議用 `animTongueEx` 替代,但實際上**遊戲本身從來沒對它呼叫 `.speed`/`.Play`/`.SetTrigger`**。那只是個被 cache 但沒被驅動的 Animator handle。設它 speed=0 在現行遊戲版本是 **no-op**,跟原本反射查找的結果是一樣的
+- 真正凍結臉/表情/lip-sync 的關鍵是 **`animBody.speed = 0`** — animBody 用 layer 系統把臉部 controller 疊在身上,layer 上的 AnimationEvent (眨眼、口型、表情) 會跟著主 animator 的 speed 一起停。KK_HSceneOptions 多年只動 animBody 沒人抱怨,印證這點。
 
-**教訓**: 不要憑記憶寫欄位名,**永遠** ilspy 一下實際的 dll。Spec/註解和實作分岔的成本很高 — 程式跑得過、log 看起來正常,但功能默默壞掉。
+**修法**:
+- 直接呼叫 `c.animBody` (取代反射)
+- 順便也呼叫 `c.animTongueEx` 作為「belt-and-braces」備援 (將來遊戲若 patch 開始驅動 tongue,自動 cover),但不要假設它有效
+- 註解寫清楚 animTongueEx 是 no-op 預備位
+
+**教訓**:
+1. **不要憑記憶寫欄位名**,永遠 ilspy
+2. **也不要無腦相信 collaborator 的建議** — 對方的論證可能正確指出問題,但提出的修法可能基於不完整的證據
+3. 任何「為了安全多 cover 一個欄位」的決定要寫清楚是 evidence-based 還是 belt-and-braces,以免下次稽核又被當成 dead code 砍掉
 
 ---
 
@@ -139,3 +158,4 @@ public Animator animTongueEx { get; protected set; }
 8. **不准憑記憶寫 KK API 欄位名** — 查 ilspy。`ChaInfo` 上的 Animator 只有 `animBody` 和 `animTongueEx`,沒有 `animFace`/`animOption`。`HSceneProc` 上的男角只有 `male`/`male1`。原因見 B5、B7。
 9. **`Freeze()` 步驟調整時必須同步更新 `ReapplyIfFrozen()`** — 兩者覆蓋的 step 集合必須鏡像,否則切體位/換對象後新 subjects 會漏網。原因見 B6。長期看應抽 helper 共用。
 10. **註解寫程式現在做什麼,不寫想做什麼** — 別在註解裡編造尚未實作的能力 (例: 「supports KPlug additions」),會誤導稽核者也誤導未來的自己。原因見 B7。
+11. **Collaborator AI / 外部建議要交叉驗證** — 對方指出的「問題」可能是真的,但他提出的「修法」可能基於部分證據。永遠用 ilspy + reference plugin grep + 整個 assembly 的使用情境再驗一次。原因見 B5 第二輪查證。
