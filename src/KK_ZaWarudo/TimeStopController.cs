@@ -36,15 +36,26 @@ namespace KK_ZaWarudo
         public bool IsFrozen => _frozen;
         private float _freezeStartTime;
 
-        // Caches
+        // Caches — HashSet (not List) so ReapplyIfFrozen can be called repeatedly
+        // (every partner switch / position change) without growing the cache unbounded
+        // when the same Components are encountered again.
         private readonly Dictionary<Animator, float> _animSpeeds = new Dictionary<Animator, float>();
-        private readonly List<Behaviour> _disabledBones = new List<Behaviour>();
-        private readonly List<ParticleSystem> _pausedParticles = new List<ParticleSystem>();
-        private readonly List<AudioSource> _pausedAudio = new List<AudioSource>();
+        private readonly HashSet<Behaviour> _disabledBones = new HashSet<Behaviour>();
+        private readonly HashSet<ParticleSystem> _pausedParticles = new HashSet<ParticleSystem>();
+        private readonly HashSet<AudioSource> _pausedAudio = new HashSet<AudioSource>();
         private float _savedSpeedCalc;
 
         public static void Bind(HSceneProc proc, List<ChaControl> females, ChaControl male, List<ChaControl> extraMales, HFlag flags)
         {
+            // Defensive: if a previous HScene didn't tear down (BepInEx hot reload,
+            // KKAPI re-init, double-fire of MapSameObjectDisable), drop the old
+            // Instance cleanly so cached state from the previous scene is restored
+            // before we lose the references.
+            if (Instance != null)
+            {
+                Plugin.LogW("Bind called while previous Instance exists — forcing Unbind first.");
+                Unbind();
+            }
             // male = protagonist, untouched per spec.
             _ = male;
             Instance = new TimeStopController
@@ -214,14 +225,12 @@ namespace KK_ZaWarudo
                 foreach (var b in c.GetComponentsInChildren<DynamicBone>(true))
                 {
                     if (b == null || !b.enabled) continue;
-                    b.enabled = false;
-                    _disabledBones.Add(b);
+                    if (_disabledBones.Add(b)) b.enabled = false;
                 }
                 foreach (var b in c.GetComponentsInChildren<DynamicBone_Ver02>(true))
                 {
                     if (b == null || !b.enabled) continue;
-                    b.enabled = false;
-                    _disabledBones.Add(b);
+                    if (_disabledBones.Add(b)) b.enabled = false;
                 }
             }
         }
@@ -234,12 +243,10 @@ namespace KK_ZaWarudo
                 foreach (var src in c.GetComponentsInChildren<AudioSource>(true))
                 {
                     if (src == null || !src.isPlaying) continue;
-                    src.Pause();
-                    _pausedAudio.Add(src);
-                    paused++;
+                    if (_pausedAudio.Add(src)) { src.Pause(); paused++; }
                 }
             }
-            Plugin.LogI($"  step4c subject AudioSources paused={paused}");
+            Plugin.LogI($"  step4c subject AudioSources paused={paused} (cumulative cache={_pausedAudio.Count})");
         }
 
         private void StopFemaleVoices()
@@ -272,8 +279,7 @@ namespace KK_ZaWarudo
             foreach (var ps in _proc.GetComponentsInChildren<ParticleSystem>(true))
             {
                 if (ps == null || !ps.isPlaying) continue;
-                ps.Pause(true);
-                _pausedParticles.Add(ps);
+                if (_pausedParticles.Add(ps)) ps.Pause(true);
             }
         }
 
