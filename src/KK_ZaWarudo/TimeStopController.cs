@@ -96,6 +96,9 @@ namespace KK_ZaWarudo
             FreezeParticles();
             Plugin.LogI($"  step4 particles paused={_pausedParticles.Count}");
 
+            // 4b. Stop in-flight female voice (KK_HSceneOptions ForceStopVoice pattern)
+            StopFemaleVoices();
+
             // 5. SFX — Enter then During (loop)
             try { AudioManager.Instance.PlayFreezeSequence(); }
             catch (System.Exception e) { Plugin.LogW($"Freeze SFX sequence failed: {e}"); }
@@ -206,6 +209,30 @@ namespace KK_ZaWarudo
                     _disabledBones.Add(b);
                 }
             }
+        }
+
+        private void StopFemaleVoices()
+        {
+            if (_flags == null) return;
+            int stopped = 0;
+            try
+            {
+                var voiceInst = Manager.Voice.Instance;
+                if (voiceInst == null) { Plugin.LogW("  Voice singleton null"); return; }
+                if (_flags.transVoiceMouth == null) { Plugin.LogW("  transVoiceMouth null"); return; }
+                for (int i = 0; i < _flags.transVoiceMouth.Length; i++)
+                {
+                    var t = _flags.transVoiceMouth[i];
+                    if (t == null) continue;
+                    voiceInst.Stop(t);
+                    stopped++;
+                }
+            }
+            catch (System.Exception e)
+            {
+                Plugin.LogW($"  StopFemaleVoices failed: {e.Message}");
+            }
+            Plugin.LogI($"  step4b female voices stopped={stopped}");
         }
 
         private void FreezeParticles()
