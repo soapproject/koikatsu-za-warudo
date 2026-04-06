@@ -22,7 +22,12 @@
     <PackageReference Include="IllusionLibs.Koikatu.Assembly-CSharp-firstpass" Version="2019.4.27.4" />
     <PackageReference Include="IllusionLibs.Koikatu.UnityEngine" Version="5.6.2.4" />
     <PackageReference Include="IllusionLibs.Koikatu.UnityEngine.UI" Version="5.6.2.4" />
-    <PackageReference Include="IllusionModdingAPI.KKAPI" Version="1.45.1" />
+    <!-- Pin to 1.40 (the lowest KKAPI we've tested against, and what runs on the
+         current dev machine). OnStartH(MonoBehaviour, HFlag, bool) overload
+         already exists in 1.40 — verified via ilspy on the installed dll.
+         Building against the lowest version means newer KKAPI installs are
+         backward-compatible. Don't bump unless we actually need a newer API. -->
+    <PackageReference Include="IllusionModdingAPI.KKAPI" Version="1.40" />
   </ItemGroup>
 
 </Project>
