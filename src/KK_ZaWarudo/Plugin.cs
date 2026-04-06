@@ -22,7 +22,15 @@ namespace KK_ZaWarudo
         public const string PluginName = "KK_ZaWarudo";
         public const string Version = "0.1.0";
 
+        // Distinctive prefix so the log can be grep'd out of BepInEx/LogOutput.log
+        // among many other plugins. Search for "ZAWA>" to find every line.
+        internal const string LogTag = "ZAWA>";
         internal static ManualLogSource Log;
+
+        internal static void LogI(string msg) => Log?.LogInfo($"{LogTag} {msg}");
+        internal static void LogD(string msg) => Log?.LogInfo($"{LogTag} [dbg] {msg}"); // promoted to Info so default log level shows it
+        internal static void LogW(string msg) => Log?.LogWarning($"{LogTag} {msg}");
+        internal static void LogE(string msg) => Log?.LogError($"{LogTag} {msg}");
 
         // General
         internal static ConfigEntry<KeyboardShortcut> ToggleKey;
@@ -74,11 +82,12 @@ namespace KK_ZaWarudo
                     new AcceptableValueRange<float>(0f, 1f)));
 
             _harmony = Harmony.CreateAndPatchAll(typeof(Hooks), GUID);
-            Log.LogInfo($"{PluginName} {Version} loaded.");
+            LogI($"{PluginName} {Version} loaded. Toggle={ToggleKey.Value} Mode={Mode.Value} Rate={AccumulationRate.Value} SfxFolder={SfxFolder.Value}");
         }
 
         private void OnDestroy()
         {
+            LogI("OnDestroy: forcing resume + unpatching.");
             TimeStopController.Instance?.Resume();
             _harmony?.UnpatchSelf();
         }
@@ -86,7 +95,13 @@ namespace KK_ZaWarudo
         private void Update()
         {
             if (ToggleKey.Value.IsDown())
-                TimeStopController.Instance?.Toggle();
+            {
+                LogI($"Hotkey pressed (frozen={TimeStopController.Instance?.IsFrozen}).");
+                if (TimeStopController.Instance == null)
+                    LogW("No TimeStopController bound — not in HScene yet.");
+                else
+                    TimeStopController.Instance.Toggle();
+            }
         }
     }
 }

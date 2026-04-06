@@ -60,9 +60,10 @@ namespace KK_ZaWarudo
         {
             if (string.IsNullOrEmpty(path) || !File.Exists(path))
             {
-                Plugin.Log.LogWarning($"[ZaWarudo] SFX not found, skipping: {path}");
+                Plugin.LogW($"SFX not found, skipping: {path}");
                 return null;
             }
+            Plugin.LogI($"Loading SFX: {path}");
             try
             {
                 // SlapMod uses WWW + WWWAudioExtensions.GetAudioClipCompressed.
@@ -87,21 +88,23 @@ namespace KK_ZaWarudo
             }
             catch (Exception e)
             {
-                Plugin.Log.LogWarning($"[ZaWarudo] Failed loading {path}: {e.Message}");
+                Plugin.LogW($"Failed loading {path}: {e.Message}");
                 return null;
             }
         }
 
-        public void PlayEnter() => Play(_enterClip);
-        public void PlayResume() => Play(_resumeClip);
+        public void PlayEnter() { Plugin.LogI($"AudioManager.PlayEnter clip={(_enterClip != null ? _enterClip.name : "null")}"); Play(_enterClip); }
+        public void PlayResume() { Plugin.LogI($"AudioManager.PlayResume clip={(_resumeClip != null ? _resumeClip.name : "null")}"); Play(_resumeClip); }
 
         private void Play(AudioClip clip)
         {
-            if (clip == null || _source == null) return;
+            if (clip == null) { Plugin.LogW("  Play skipped: clip null"); return; }
+            if (_source == null) { Plugin.LogW("  Play skipped: source null"); return; }
             float master = 1f;
             try { master = Manager.Config.SoundData.Master.Volume * 0.01f; }
-            catch { /* fall back to 1.0 if anything is missing */ }
+            catch (System.Exception e) { Plugin.LogW($"  master volume read failed, using 1.0: {e.Message}"); }
             _source.volume = Mathf.Clamp01(master * Plugin.SfxVolume.Value);
+            Plugin.LogI($"  playing at vol={_source.volume:F2}");
             _source.PlayOneShot(clip);
         }
     }

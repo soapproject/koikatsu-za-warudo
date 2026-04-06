@@ -25,6 +25,7 @@ namespace KK_ZaWarudo
         private HFlag _flags;
 
         private bool _frozen;
+        public bool IsFrozen => _frozen;
         private float _freezeStartTime;
 
         // Caches
@@ -55,7 +56,7 @@ namespace KK_ZaWarudo
         {
             if (_proc == null)
             {
-                Plugin.Log.LogInfo("Toggle ignored: not in HScene.");
+                Plugin.LogI("Toggle ignored: not in HScene.");
                 return;
             }
             if (_frozen) Resume();
@@ -64,25 +65,35 @@ namespace KK_ZaWarudo
 
         public void Freeze()
         {
-            if (_frozen || _proc == null) return;
+            if (_frozen || _proc == null)
+            {
+                Plugin.LogW($"Freeze ignored: frozen={_frozen} proc={(_proc != null)}");
+                return;
+            }
             _frozen = true;
             _freezeStartTime = Time.realtimeSinceStartup;
+            Plugin.LogI($"=== FREEZE start === females={_females?.Count ?? -1}");
 
             // 1. Animator.speed = 0 on females
             FreezeFemaleAnimators();
+            Plugin.LogI($"  step1 animators cached={_animSpeeds.Count}");
 
             // 2. HFlag.speedCalc
             if (_flags != null)
             {
                 _savedSpeedCalc = _flags.speedCalc;
                 _flags.speedCalc = 0f;
+                Plugin.LogI($"  step2 speedCalc {_savedSpeedCalc} -> 0  gaugeFemale={_flags.gaugeFemale:F1}");
             }
+            else Plugin.LogW("  step2 flags=null, skipped");
 
             // 3. DynamicBones on females
             FreezeFemaleBones();
+            Plugin.LogI($"  step3 bones disabled={_disabledBones.Count}");
 
             // 4. ParticleSystems under HScene root
             FreezeParticles();
+            Plugin.LogI($"  step4 particles paused={_pausedParticles.Count}");
 
             // 5. SFX
             try
@@ -92,50 +103,55 @@ namespace KK_ZaWarudo
             }
             catch (System.Exception e)
             {
-                Plugin.Log.LogWarning($"Enter SFX play failed: {e}");
+                Plugin.LogW($"Enter SFX play failed: {e}");
             }
 
-            Plugin.Log.LogInfo("ZA WARUDO!");
+            Plugin.LogI("=== ZA WARUDO! === (freeze complete)");
         }
 
         public void Resume()
         {
             if (!_frozen) return;
+            var elapsed = Time.realtimeSinceStartup - _freezeStartTime;
+            Plugin.LogI($"=== RESUME start === elapsed={elapsed:F2}s");
 
-            // Restore animators
+            int restoredAnims = 0;
             foreach (var kv in _animSpeeds)
             {
-                if (kv.Key != null) kv.Key.speed = kv.Value;
+                if (kv.Key != null) { kv.Key.speed = kv.Value; restoredAnims++; }
             }
             _animSpeeds.Clear();
+            Plugin.LogI($"  restored animators={restoredAnims}");
 
-            // Restore bones
+            int restoredBones = 0;
             foreach (var b in _disabledBones)
             {
-                if (b != null) b.enabled = true;
+                if (b != null) { b.enabled = true; restoredBones++; }
             }
             _disabledBones.Clear();
+            Plugin.LogI($"  re-enabled bones={restoredBones}");
 
-            // Resume particles
+            int restoredParticles = 0;
             foreach (var p in _pausedParticles)
             {
-                if (p != null) p.Play(true);
+                if (p != null) { p.Play(true); restoredParticles++; }
             }
             _pausedParticles.Clear();
+            Plugin.LogI($"  resumed particles={restoredParticles}");
 
-            // Restore speedCalc
             if (_flags != null)
+            {
                 _flags.speedCalc = _savedSpeedCalc;
+                Plugin.LogI($"  restored speedCalc={_savedSpeedCalc}");
+            }
 
-            // Inject gauge per ResumeMode
             InjectGauge();
 
-            // SFX
             try { AudioManager.Instance.PlayResume(); }
-            catch (System.Exception e) { Plugin.Log.LogWarning($"Resume SFX play failed: {e}"); }
+            catch (System.Exception e) { Plugin.LogW($"Resume SFX play failed: {e}"); }
 
             _frozen = false;
-            Plugin.Log.LogInfo("Toki wo ugokidasu.");
+            Plugin.LogI("=== Toki wo ugokidasu === (resume complete)");
         }
 
         /// <summary>
@@ -215,14 +231,14 @@ namespace KK_ZaWarudo
             {
                 case ResumeMode.Instant:
                     _flags.gaugeFemale = 100f;
-                    Plugin.Log.LogInfo("Gauge → 100 (Instant).");
+                    Plugin.LogI("Gauge → 100 (Instant).");
                     break;
                 case ResumeMode.Accumulated:
                     var elapsed = Time.realtimeSinceStartup - _freezeStartTime;
                     var delta = elapsed * Plugin.AccumulationRate.Value;
                     var before = _flags.gaugeFemale;
                     _flags.gaugeFemale = Mathf.Min(100f, before + delta);
-                    Plugin.Log.LogInfo($"Gauge {before:F1} → {_flags.gaugeFemale:F1} (+{delta:F1} over {elapsed:F1}s).");
+                    Plugin.LogI($"Gauge {before:F1} → {_flags.gaugeFemale:F1} (+{delta:F1} over {elapsed:F1}s).");
                     break;
             }
         }
