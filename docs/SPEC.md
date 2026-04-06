@@ -45,12 +45,27 @@
 | General | Toggle Key | KeyboardShortcut | `T` | 觸發熱鍵 |
 | General | Resume Mode | enum {Instant, Accumulated} | `Accumulated` | 解除時的快感注入方式 |
 | General | Accumulation Rate | float | `10.0` | Accumulated 模式下每秒累積的快感點數 |
-| Audio | SFX Folder | string | `BepInEx/plugins/BGM/ZaWarudo/` | 音效資料夾 (參考 SlapMod.dll 慣例) |
-| Audio | Enter SFX Filename | string | `enter.wav` | 進入時停音效檔名 (放在 SFX Folder 下) |
+| Audio | SFX Folder | string | `<PluginPath>/bgm/zawarudo/` | 音效資料夾 (對齊 SlapMod 慣例的 `bgm/` 子目錄) |
+| Audio | Enter SFX Filename | string | `enter.wav` | 進入時停音效檔名 |
 | Audio | Resume SFX Filename | string | `resume.wav` | 解除時音效檔名 |
-| Audio | SFX Volume | float (0–1) | `1.0` | 自訂音效音量 |
+| Audio | SFX Volume | float (0–1) | `1.0` | 自訂音效相對音量 (還會再乘上遊戲主音量) |
 
-音效檔以使用者自備為原則,plugin **不附帶版權音檔**;載入方式參考 `SlapMod.dll` (從 `BepInEx/plugins/BGM/` 下讀 wav,以 `WWW` 或 `UnityWebRequestMultimedia` 載入成 `AudioClip`)。缺檔則靜默跳過。
+**載入方式 (從 `references/SlapMod/SlapMod.decompiled.cs:288` 取得的範式)**:
+```csharp
+// 1. 啟動時 Awake() 載入,缺檔靜默跳過
+WWW www = new WWW(Utility.ConvertToWWWFormat(path));
+AudioClip clip = WWWAudioExtensions.GetAudioClipCompressed(www, false, AudioType.WAV); // AudioType 20
+while (clip.loadState != AudioDataLoadState.Loaded) { }
+
+// 2. AudioSource 掛在 plugin GameObject 上
+audioSource = gameObject.AddComponent<AudioSource>();
+audioSource.clip = enterClip;
+
+// 3. 播放時音量 = 遊戲主音量 * 自家 config * 0.01
+audioSource.volume = Config.SoundData.Master.Volume * SfxVolume.Value * 0.01f;
+audioSource.Play();
+```
+plugin **不附帶版權音檔**,使用者自備丟到 `bgm/zawarudo/`。
 
 ---
 
@@ -75,8 +90,11 @@
 ### 已決 (2026-04-07)
 - **Q1**: 累積與注入的目標是 **快感量 (`HFlag.gaugeFemale`)**,不是敏感度 multiplier
 - **Q2**: Instant 拉滿後 **不主動 trigger finish**,交給遊戲或其他 plugin 自然處理
-- **Q3**: 時停期間 **允許** 玩家切換體位 / 操作 UI,維持遊玩自由度
-- **Q4**: 音效採 **SlapMod.dll 慣例** — 讀 `BepInEx/plugins/BGM/ZaWarudo/` 下的 wav,以獨立 AudioSource 播放,避開遊戲 SE bus 影響 (待開發時實際 decompile SlapMod.dll 確認 API)
+- **Q3**: 時停期間 **允許** 玩家切換體位 / 操作 UI / **切換對象女角** (3P/4P 中換人),維持遊玩自由度。實作影響:`lstFemale` 在切換後 reference 可能變動,需在 `HSceneProc.ChangeAnimator` postfix 重新對「當前非主角」套用 Animator.speed=0
+- **Q4**: 音效採 **SlapMod.dll 範式** (已 decompile,見 [references/SlapMod/SlapMod.decompiled.cs:288](../references/SlapMod/SlapMod.decompiled.cs#L288)):
+  - 路徑 `Paths.PluginPath + "/bgm/zawarudo/<file>.wav"`
+  - `WWW` + `WWWAudioExtensions.GetAudioClipCompressed(www, false, AudioType.WAV)` 載入
+  - `AddComponent<AudioSource>()` + `Play()`,音量 = `Config.SoundData.Master.Volume × SfxVolume × 0.01f`
 
 ---
 
