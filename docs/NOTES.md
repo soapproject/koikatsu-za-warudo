@@ -196,6 +196,30 @@ grep -n "animTongueEx\|gaugeFemale\|whatever" /tmp/full_asm.cs
 
 別人的 plugin 已經 commit 過的可以放到 `references/`,沒有原始碼的就 decompile 後放到 `references/<name>/<name>.decompiled.cs` (見 [SlapMod 的 case](../references/SlapMod/SlapMod.decompiled.cs))。
 
+### KKAPI 已經提供的功能 (不要重複造輪子)
+KKAPI ([references/IllusionModdingAPI/](../references/IllusionModdingAPI/)) 是大多數 KK plugin 的標配。寫新功能前先 grep 一下,別自己 patch 已經被 wrap 過的東西。
+
+| 你想做的事 | KKAPI 已經有 | 位置 |
+|---|---|---|
+| 偵測 H scene 開始/結束 | `GameCustomFunctionController.OnStartH/OnEndH` (含 VR 支援) | `KKAPI/MainGame/GameCustomFunctionController.cs` |
+| 知道現在是不是在 HScene | `GameAPI.InsideHScene` (static bool) | `KKAPI/MainGame/GameApi.cs` |
+| 註冊自己的 game-level controller | `GameAPI.RegisterExtraBehaviour<T>(extendedDataId)` | 同上 |
+| HFlag 模式判斷 (peeping/shower 等) | `HFlag` extension methods | `KKAPI/MainGame/Utilities/GameExtensions.cs` |
+| Maker (角色卡編輯器) hook | `MakerAPI` 整套 | `KKAPI/Maker/` |
+| Studio hook | `StudioAPI` | `KKAPI/Studio/` |
+| ConfigurationManager attribute | `ConfigurationManagerAttributes` 範本 | 多個 plugin 提供 |
+
+**KKAPI 沒提供** (本 plugin 必須自己做):
+- HScene 內部欄位存取 (`lstFemale`, `male`, `male1`, `flags.transVoiceMouth` 等) — 自己 Traverse
+- `HSceneProc.ChangeAnimator` 的 callback — 沒有,自己 patch
+- WAV 載入 — 沒有,參考 SlapMod 範式
+- Animator / DynamicBone / AudioSource 凍結 — 純 Unity,不會也不該由 KKAPI 提供
+- Free voice channel 控制 — KK 用 `Manager.Voice.Instance.Stop(transform)`
+
+**目前重複的部分** (TODO,改用 KKAPI):
+- 我們自己 Harmony patch `HSceneProc.MapSameObjectDisable` + `OnDestroy` — 應該改成 `GameCustomFunctionController` 子類,免費送 VR 支援
+- `Update()` 裡用 `TimeStopController.Instance != null` 當「在不在 HScene」的 proxy — 應該用 `GameAPI.InsideHScene`
+
 ### 查證流程 (任何懷疑 KK API 行為時)
 1. **ilspy 真實 game dll** — 第一手證據,類別實際長相
 2. **ilspy 想看的 type 用 `-t TypeName`** — 看單一類別的成員、欄位、方法簽名
