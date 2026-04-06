@@ -58,10 +58,15 @@
 | General | Resume Mode | enum {Instant, Accumulated} | `Accumulated` | 解除時的快感注入方式 |
 | General | Accumulation Rate | float | `10.0` | Accumulated 模式下每秒累積的快感點數 |
 | Audio | SFX Folder | string | `<PluginPath>/bgm/zawarudo/` | 音效資料夾 (對齊 SlapMod 慣例的 `bgm/` 子目錄) |
-| Audio | 1. Enter SFX | string | `enter.wav` | 時停**開始**音效 (Freeze 序列第 1 段) |
-| Audio | 2. During SFX (loop) | string | `during.wav` | 時停**過程中**女角聲音,Enter 結束後接著播,**循環直到 Resume** |
-| Audio | 3. Exit SFX | string | `exit.wav` | 時停**結束**音效 (Resume 序列第 1 段,中斷 During loop) |
-| Audio | 4. Female Resume SFX | string | `female_resume.wav` | 時停結束時的**女角聲音**,Exit 結束後接著播 |
+| Audio | 1. Enter SFX | string | `zawarudo_sfx_enter.wav` | 時停**開始**音效 (Freeze 序列第 1 段) |
+| Audio | 2. Female During SFX (loop) | string | `zawarudo_female_during.wav` | 時停**過程中**女角聲音,Enter 結束後接著播,**循環直到 Resume** |
+| Audio | 3. Exit SFX | string | `zawarudo_sfx_exit.wav` | 時停**結束**音效 (Resume 序列第 1 段,中斷 During loop) |
+| Audio | 4. Female Resume SFX | string | `zawarudo_female_resume.wav` | 時停結束時的**女角聲音**,Exit 結束後接著播 |
+
+**檔名規則**: `zawarudo_<role>_<phase>.wav`
+- `role` ∈ { `sfx`, `female` }
+- `phase` ∈ { `enter`, `during`, `exit`, `resume` }
+- `zawarudo_` prefix 避免與其他 plugin 的 bgm/ 檔案撞名
 | Audio | SFX Volume | float (0–1) | `1.0` | 自訂音效相對音量 (還會再乘上遊戲主音量) |
 
 **播放序列 (單一 AudioSource,絕不重疊)**:

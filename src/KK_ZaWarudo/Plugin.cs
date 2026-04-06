@@ -70,20 +70,24 @@ namespace KK_ZaWarudo
                 Path.Combine(Paths.PluginPath, "bgm/zawarudo"),
                 "Folder containing wav files. Defaults to BepInEx/plugins/bgm/zawarudo (SlapMod-style).");
 
+            // Naming convention: zawarudo_<role>_<phase>.wav
+            //   role  = sfx | female
+            //   phase = enter | during | exit | resume
+            // Prefix avoids collision with other plugins sharing the bgm/ folder.
             EnterSfxFile = Config.Bind("Audio", "1. Enter SFX",
-                "enter.wav",
-                "Played first when freeze starts. Missing file = silent.");
+                "zawarudo_sfx_enter.wav",
+                "SFX played first when freeze starts. Missing file = silent.");
 
-            DuringSfxFile = Config.Bind("Audio", "2. During SFX (loop)",
-                "during.wav",
+            DuringSfxFile = Config.Bind("Audio", "2. Female During SFX (loop)",
+                "zawarudo_female_during.wav",
                 "Female voice loop while time is frozen. Starts after Enter finishes. Missing file = silent.");
 
             ExitSfxFile = Config.Bind("Audio", "3. Exit SFX",
-                "exit.wav",
-                "Played first when freeze ends (interrupts the During loop). Missing file = silent.");
+                "zawarudo_sfx_exit.wav",
+                "SFX played when freeze ends (interrupts the During loop). Missing file = silent.");
 
             FemaleResumeSfxFile = Config.Bind("Audio", "4. Female Resume SFX",
-                "female_resume.wav",
+                "zawarudo_female_resume.wav",
                 "Female voice played after Exit finishes. Missing file = silent.");
 
             SfxVolume = Config.Bind("Audio", "SFX Volume",
