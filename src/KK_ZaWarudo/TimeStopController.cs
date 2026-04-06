@@ -23,7 +23,9 @@ namespace KK_ZaWarudo
     {
         public static TimeStopController Instance { get; private set; }
 
-        private HSceneProc _proc;
+        // Could be HSceneProc OR VRHScene (KKAPI dispatches both into the same callback).
+        // We only need .gameObject / GetComponentsInChildren on it, so MonoBehaviour suffices.
+        private MonoBehaviour _proc;
         private List<ChaControl> _females;
         // _male = protagonist, intentionally untouched per spec.
         // _extraMales currently sourced from HSceneProc.male1 only (darkness mode).
@@ -52,7 +54,7 @@ namespace KK_ZaWarudo
         private readonly HashSet<AudioSource> _pausedAudio = new HashSet<AudioSource>();
         private float _savedSpeedCalc;
 
-        public static void Bind(HSceneProc proc, List<ChaControl> females, ChaControl male, List<ChaControl> extraMales, HFlag flags)
+        public static void Bind(MonoBehaviour proc, List<ChaControl> females, ChaControl male, List<ChaControl> extraMales, HFlag flags)
         {
             // Defensive: if a previous HScene didn't tear down (BepInEx hot reload,
             // KKAPI re-init, double-fire of MapSameObjectDisable), drop the old

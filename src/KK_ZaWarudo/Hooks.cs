@@ -1,55 +1,58 @@
-using System.Collections.Generic;
+using System;
 using HarmonyLib;
 
 namespace KK_ZaWarudo
 {
     /// <summary>
-    /// Harmony patches.
-    /// MapSameObjectDisable is the canonical late-init hook used by KK_HSceneOptions
-    /// (originally from KK_EyeShaking) — by then HSceneProc has populated lstFemale/male/flags.
+    /// Harmony patches still owned by us.
+    ///
+    /// HScene start/end is now handled by KKAPI's GameCustomFunctionController
+    /// (see ZaWarudoController.cs) — we no longer patch MapSameObjectDisable / OnDestroy.
+    ///
+    /// What remains: ChangeAnimator postfix, which KKAPI does NOT surface as a callback.
+    /// We need it to re-pin the freeze on the new active set when the player switches
+    /// position / partner mid-freeze. Patched on both HSceneProc and (when present)
+    /// VRHScene, mirroring KKAPI's own VR pattern in GameAPI.Hooks.SetupHooks.
     /// </summary>
     internal static class Hooks
     {
-        [HarmonyPostfix]
-        [HarmonyPatch(typeof(HSceneProc), "MapSameObjectDisable")]
-        private static void HSceneInitPost(HSceneProc __instance)
+        public static void Apply(Harmony harmony)
         {
+            // Vanilla HSceneProc.ChangeAnimator — declared via attribute below.
+            harmony.PatchAll(typeof(Hooks));
+
+            // VR variant: VRHScene type only exists in VR builds. Use AccessTools so
+            // a non-VR install doesn't crash plugin load.
             try
             {
-                var trav = Traverse.Create(__instance);
-                var females = trav.Field("lstFemale").GetValue<List<ChaControl>>();
-                var male = trav.Field("male").GetValue<ChaControl>();
-                // male1 only exists in darkness builds; absent in vanilla KK. Guard via Traverse (no throw).
-                var male1 = trav.Field("male1").GetValue<ChaControl>();
-                var flags = __instance.flags;
-
-                var extras = new List<ChaControl>();
-                if (male1 != null) extras.Add(male1);
-
-                Plugin.LogI($"Hook MapSameObjectDisable: females={females?.Count ?? -1} male={(male != null ? male.name : "null")} extraMales={extras.Count} flags={(flags != null ? "ok" : "null")}");
-                TimeStopController.Bind(__instance, females, male, extras, flags);
+                var vrType = Type.GetType("VRHScene, Assembly-CSharp");
+                if (vrType != null)
+                {
+                    var vrChange = AccessTools.Method(vrType, "ChangeAnimator");
+                    if (vrChange != null)
+                    {
+                        var post = new HarmonyMethod(AccessTools.Method(typeof(Hooks), nameof(ChangeAnimatorPost)));
+                        harmony.Patch(vrChange, postfix: post);
+                        Plugin.LogI("Patched VRHScene.ChangeAnimator (VR build detected).");
+                    }
+                }
             }
-            catch (System.Exception e)
+            catch (Exception e)
             {
-                Plugin.LogE($"HSceneInitPost failed: {e}");
+                Plugin.LogW($"VR ChangeAnimator patch skipped: {e.Message}");
             }
-        }
-
-        [HarmonyPostfix]
-        [HarmonyPatch(typeof(HSceneProc), "OnDestroy")]
-        private static void HSceneEndPost()
-        {
-            Plugin.LogI("Hook HSceneProc.OnDestroy: unbinding.");
-            TimeStopController.Unbind();
         }
 
         /// <summary>
         /// Re-apply freeze on partner-switch / position-change so the newly active
-        /// female does not animate while time is stopped.
+        /// female does not animate while time is stopped. HashSet caches inside
+        /// TimeStopController dedupe, so repeated calls are safe.
+        /// Used for both HSceneProc.ChangeAnimator (attribute below) and
+        /// VRHScene.ChangeAnimator (manual patch in Apply).
         /// </summary>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(HSceneProc), "ChangeAnimator")]
-        private static void ChangeAnimatorPost()
+        public static void ChangeAnimatorPost()
         {
             if (TimeStopController.Instance != null && TimeStopController.Instance.IsFrozen)
             {

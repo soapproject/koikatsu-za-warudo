@@ -3,6 +3,8 @@ using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
+using KKAPI;
+using KKAPI.MainGame;
 using UnityEngine;
 
 namespace KK_ZaWarudo
@@ -16,6 +18,7 @@ namespace KK_ZaWarudo
     [BepInPlugin(GUID, PluginName, Version)]
     [BepInProcess("Koikatu")]
     [BepInProcess("Koikatsu Party")]
+    [BepInDependency(KoikatuAPI.GUID, KoikatuAPI.VersionConst)]
     public class Plugin : BaseUnityPlugin
     {
         public const string GUID = "weiss.kk.zawarudo";
@@ -95,7 +98,14 @@ namespace KK_ZaWarudo
                 new ConfigDescription("Relative volume; multiplied by game master volume.",
                     new AcceptableValueRange<float>(0f, 1f)));
 
-            _harmony = Harmony.CreateAndPatchAll(typeof(Hooks), GUID);
+            // KKAPI manages the HScene start/end lifecycle for us (incl. VR).
+            // See ZaWarudoController.OnStartH/OnEndH.
+            GameAPI.RegisterExtraBehaviour<ZaWarudoController>(null);
+
+            // We still own the ChangeAnimator hook (KKAPI doesn't surface it).
+            _harmony = new Harmony(GUID);
+            Hooks.Apply(_harmony);
+
             AudioManager.Instance.StartLoad();
             LogI($"{PluginName} {Version} loaded. Toggle={ToggleKey.Value} Mode={Mode.Value} Rate={AccumulationRate.Value} SfxFolder={SfxFolder.Value}");
         }
@@ -109,14 +119,25 @@ namespace KK_ZaWarudo
 
         private void Update()
         {
-            if (ToggleKey.Value.IsDown())
+            if (!ToggleKey.Value.IsDown()) return;
+
+            // KKAPI authoritative answer for "are we in an H scene right now"
+            if (!GameAPI.InsideHScene)
             {
-                LogI($"Hotkey pressed (frozen={TimeStopController.Instance?.IsFrozen}).");
-                if (TimeStopController.Instance == null)
-                    LogW("No TimeStopController bound — not in HScene yet.");
-                else
-                    TimeStopController.Instance.Toggle();
+                LogI("Hotkey pressed but not in HScene (GameAPI.InsideHScene=false).");
+                return;
             }
+
+            if (TimeStopController.Instance == null)
+            {
+                // Inside HScene per KKAPI, but our controller hasn't bound yet.
+                // Should be vanishingly rare — KKAPI fires OnStartH after a 1-frame yield.
+                LogW("InsideHScene but TimeStopController not bound (race?).");
+                return;
+            }
+
+            LogI($"Hotkey pressed (frozen={TimeStopController.Instance.IsFrozen}).");
+            TimeStopController.Instance.Toggle();
         }
     }
 }
