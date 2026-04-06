@@ -58,9 +58,15 @@
 | General | Resume Mode | enum {Instant, Accumulated} | `Accumulated` | 解除時的快感注入方式 |
 | General | Accumulation Rate | float | `10.0` | Accumulated 模式下每秒累積的快感點數 |
 | Audio | SFX Folder | string | `<PluginPath>/bgm/zawarudo/` | 音效資料夾 (對齊 SlapMod 慣例的 `bgm/` 子目錄) |
-| Audio | Enter SFX Filename | string | `enter.wav` | 進入時停音效檔名 |
-| Audio | Resume SFX Filename | string | `resume.wav` | 解除時音效檔名 |
+| Audio | 1. Enter SFX | string | `enter.wav` | 時停**開始**音效 (Freeze 序列第 1 段) |
+| Audio | 2. During SFX (loop) | string | `during.wav` | 時停**過程中**女角聲音,Enter 結束後接著播,**循環直到 Resume** |
+| Audio | 3. Exit SFX | string | `exit.wav` | 時停**結束**音效 (Resume 序列第 1 段,中斷 During loop) |
+| Audio | 4. Female Resume SFX | string | `female_resume.wav` | 時停結束時的**女角聲音**,Exit 結束後接著播 |
 | Audio | SFX Volume | float (0–1) | `1.0` | 自訂音效相對音量 (還會再乘上遊戲主音量) |
+
+**播放序列 (單一 AudioSource,絕不重疊)**:
+- **Freeze**: `Enter (one-shot, 等播完)` → `During (loop 直到被取消)`
+- **Resume**: `中斷 During` → `Exit (one-shot, 等播完)` → `Female Resume (one-shot)`
 
 ### 6. 音效載入範式
 參考 [references/SlapMod/SlapMod.decompiled.cs:288](../references/SlapMod/SlapMod.decompiled.cs#L288):

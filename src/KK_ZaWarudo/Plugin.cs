@@ -39,8 +39,10 @@ namespace KK_ZaWarudo
 
         // Audio
         internal static ConfigEntry<string> SfxFolder;
-        internal static ConfigEntry<string> EnterSfxFile;
-        internal static ConfigEntry<string> ResumeSfxFile;
+        internal static ConfigEntry<string> EnterSfxFile;       // 1. 時停開始
+        internal static ConfigEntry<string> DuringSfxFile;      // 2. 過程中女角 (loop)
+        internal static ConfigEntry<string> ExitSfxFile;        // 3. 時停結束
+        internal static ConfigEntry<string> FemaleResumeSfxFile;// 4. 結束時女角
         internal static ConfigEntry<float> SfxVolume;
 
         internal static Plugin Instance;
@@ -68,13 +70,21 @@ namespace KK_ZaWarudo
                 Path.Combine(Paths.PluginPath, "bgm/zawarudo"),
                 "Folder containing wav files. Defaults to BepInEx/plugins/bgm/zawarudo (SlapMod-style).");
 
-            EnterSfxFile = Config.Bind("Audio", "Enter SFX Filename",
+            EnterSfxFile = Config.Bind("Audio", "1. Enter SFX",
                 "enter.wav",
-                "Filename inside SFX Folder, played on freeze. Missing file = silent.");
+                "Played first when freeze starts. Missing file = silent.");
 
-            ResumeSfxFile = Config.Bind("Audio", "Resume SFX Filename",
-                "resume.wav",
-                "Filename inside SFX Folder, played on resume. Missing file = silent.");
+            DuringSfxFile = Config.Bind("Audio", "2. During SFX (loop)",
+                "during.wav",
+                "Female voice loop while time is frozen. Starts after Enter finishes. Missing file = silent.");
+
+            ExitSfxFile = Config.Bind("Audio", "3. Exit SFX",
+                "exit.wav",
+                "Played first when freeze ends (interrupts the During loop). Missing file = silent.");
+
+            FemaleResumeSfxFile = Config.Bind("Audio", "4. Female Resume SFX",
+                "female_resume.wav",
+                "Female voice played after Exit finishes. Missing file = silent.");
 
             SfxVolume = Config.Bind("Audio", "SFX Volume",
                 1f,

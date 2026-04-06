@@ -49,6 +49,7 @@ namespace KK_ZaWarudo
         public static void Unbind()
         {
             Instance?.Resume();
+            try { AudioManager.Instance.StopAll(); } catch { }
             Instance = null;
         }
 
@@ -95,16 +96,9 @@ namespace KK_ZaWarudo
             FreezeParticles();
             Plugin.LogI($"  step4 particles paused={_pausedParticles.Count}");
 
-            // 5. SFX
-            try
-            {
-                AudioManager.Instance.EnsureLoaded();
-                AudioManager.Instance.PlayEnter();
-            }
-            catch (System.Exception e)
-            {
-                Plugin.LogW($"Enter SFX play failed: {e}");
-            }
+            // 5. SFX — Enter then During (loop)
+            try { AudioManager.Instance.PlayFreezeSequence(); }
+            catch (System.Exception e) { Plugin.LogW($"Freeze SFX sequence failed: {e}"); }
 
             Plugin.LogI("=== ZA WARUDO! === (freeze complete)");
         }
@@ -147,8 +141,9 @@ namespace KK_ZaWarudo
 
             InjectGauge();
 
-            try { AudioManager.Instance.PlayResume(); }
-            catch (System.Exception e) { Plugin.LogW($"Resume SFX play failed: {e}"); }
+            // SFX — interrupts During loop, then Exit, then FemaleResume
+            try { AudioManager.Instance.PlayResumeSequence(); }
+            catch (System.Exception e) { Plugin.LogW($"Resume SFX sequence failed: {e}"); }
 
             _frozen = false;
             Plugin.LogI("=== Toki wo ugokidasu === (resume complete)");
