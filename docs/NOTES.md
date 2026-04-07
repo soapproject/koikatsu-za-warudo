@@ -103,6 +103,37 @@ Pitfalls hit during development, risks found in audits, and unresolved follow-up
 
 ---
 
+## User feedback (v0.1 playtest, unresolved)
+
+Recorded verbatim from a tester. Each item still needs investigation/repro before fix — none of this is yet diagnosed or attempted.
+
+- **F1 — Head tracking + blinking still active during freeze.** Our `HMotionEyeNeckFemale.Proc` prefix-skip evidently isn't the only driver. Possibilities to investigate: blink driven from a separate `EyeLookController` / `EyeLookCalc` (these classes exist per ilspy, lines ~182705/183105), head turn driven from `NeckLookControllerVer2` directly, or animator events on `animBody` that we should be blocking despite `speed=0`. Need to grep callers of `chara.ChangeEyesOpenMax` etc. and identify the per-frame source.
+
+- **F2 — Woman moans + a "crumpling/boiling noise" play during freeze with zero input.** Our `HVoiceCtrl.VoiceProc/BreathProc` prefixes return false but something else is queueing voice. Possible culprits: `Manager.Voice` has another tick path, or audio is coming from `HSeCtrl` that we thought was skipped. The "crumpling/boiling" noise sounds like fluid/SE — could be `HParticleCtrl` SE or a separate ambient loop we never silenced.
+
+- **F3 — On resume, woman screams once but mouth doesn't move and no subtitles appear; only one voice line variant.** Two real issues here:
+  1. Our resume audio plays through *our* AudioSource, decoupled from the game's lip-sync / subtitle pipeline, so mouth and text don't follow.
+  2. Only one wav per slot → no variety. User suggestion: pool of clips selected at random, ideally context-aware (intercourse vs head etc).
+  Possible better path: invoke the game's own voice trigger (`Singleton<Voice>.Instance.Play(...)` or whatever HVoiceCtrl uses) so mouth + subtitles align, falling back to our wav only if we want a custom one.
+
+- **F4 — UI input is blocked / queued while the resume scream is playing.** Selecting anything during the resume window (~16s right now) just queues the action. Probably tied to KKAPI or some UI gating we don't own — but might also be us holding a coroutine that blocks input. Investigate.
+
+- **F5 — Boop plugin does not work during freeze.** Boop hooks `HandCtrl` (touch / grab system). We're skipping `HMotionEyeNeck.Proc` etc., but Boop itself shouldn't be affected by our patches. May be that Boop relies on animator state which is `speed=0` now. **User explicitly wants Boop to work in frozen time** — needs investigation.
+
+- **F6 — Touching the female changes her expression even during freeze.** The touch → expression path bypasses `HMotionEyeNeck.Proc` (which we skip). Likely `HandCtrl` calls `ChangeEyesPtn`/`ChangeMouthPtn` directly via something like `HExpression` reaction system. Need to find that callsite and either skip-prefix it during freeze, or accept it (touching is intentional player action — could be a feature).
+
+- **F7 — Hair / skirt physics turn off when time freezes.** This is currently *intended*: our `FreezeFemaleBones` disables `DynamicBone` and `DynamicBone_Ver02`. User finds it ugly — they want hair/cloth to keep draping naturally during freeze (gravity-settled), not be locked mid-motion. Options to consider: don't disable DynamicBone at all (let physics keep simulating with the body frozen — bones will drape), or only disable for a moment then re-enable.
+
+- **F8 — Freezing time reverts an in-progress ahegao expression.** The female loses her current ahegao face the moment we freeze. Our `HMotionEyeNeck.Proc` skip prevents new expression updates, but something is *replacing* the current face on the freeze frame — possibly because we restore animator speed=0 mid-state and the next layer state evaluation hits a default, or `HFlag.speedCalc=0` resets a tied state. Capture the current `eyesPtn`/`mouthPtn`/`eyebrowPtn` on freeze and re-apply on the same frame after the prefixes engage.
+
+- **F9 — Fluid particles don't fall during freeze, until the female reaches a certain animation timestamp.** Our `ParticleSystem.Pause(true)` halts simulation entirely, so existing fluid blobs hang in mid-air. User wants gravity to keep working on existing particles (only stop emission of new ones). Switch from `Pause()` to setting the emission module enabled=false (cache + restore) so existing particles continue to simulate to ground.
+
+- **F10 — Free H: cannot select HSprite UI buttons (speed up/down, auto, position change) while frozen.** Possibly the same root as F4 — UI is gated. **User wants to be able to control free H actions during freeze.** Might need to NOT freeze whatever the HSprite click handler depends on, or whitelist specific actions to bypass our prefixes.
+
+  Sub-issue: user reports `Accumulation Rate` config "seems to affect non-frozen time as well". This shouldn't be happening — `InjectGauge()` is only called in `Resume()`. Could be perception (post-resume gauge bump appears continuous if you resume mid-progression), but verify: log gauge values across a full freeze→resume cycle and confirm the only change is the one explicit injection.
+
+---
+
 ## Known unresolved risks / Follow-ups
 
 ### R1 — `AudioManager` holds strong refs to `AudioClip`s forever
