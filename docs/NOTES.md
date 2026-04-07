@@ -1,186 +1,183 @@
-# KK_ZaWarudo — 注意事項 / 已知風險 / 已修 bug
+# KK_ZaWarudo — Notes / Known Risks / Fixed Bugs
 
-開發過程踩過的坑、稽核發現的風險,以及未修的 follow-up。新進來改 code 的人 (或未來的我) 進這份文件先掃一遍可省半小時。
-
----
-
-## 已修的 bug
-
-### B1 — `MissingMethodException: System.Array.Empty`  (commit `~`)
-**症狀**: BepInEx 載入 plugin 後 Awake 直接拋例外,LogOutput.log 完全沒有 `ZAWA>` 字樣,只有 BepInEx 自己的 `Loading [KK_ZaWarudo 0.1.0]` 那行。
-
-**原因**: csproj 原本 target `net46`,C# 編譯器會把空陣列字面量降級成 `Array.Empty<T>()` 呼叫。但 KK 跑在 Unity 5.6 / Mono .NET 3.5 runtime,**沒有** `Array.Empty`。
-
-**修法**: csproj 改 `<TargetFramework>net35</TargetFramework>`,跟 KK_HSceneOptions 等所有 KK 慣例對齊。
-
-**教訓**: 任何 KK plugin 都該 target net35。即便編譯成功也不代表執行不會炸 — runtime 的 BCL 表面比 net46 小得多。
+Pitfalls hit during development, risks found in audits, and unresolved follow-ups. Anyone (or future-me) about to touch this code should skim this first — it'll save half an hour.
 
 ---
 
-### B2 — SFX 載入回傳空殼 AudioClip (length=0, name="") (commit `~`)
-**症狀**: log 顯示 `enter=True during=True ...` 但 `[Enter] playing (0.00s, vol=1.00)` 馬上 done,什麼都聽不到。
+## Fixed bugs
 
-**原因**: 原本 `TryLoad` 是同步函式,在 main thread 上 spin-wait `while (clip.loadState != Loaded)`。`WWW` 的下載 pump **靠 main thread 跑**,spin 把 main thread 卡死 → loadState 永遠到不了 `Loaded` → spin 撞 guard 上限後返回未載入完成的 clip,length/name 都還沒填。
+### B1 — `MissingMethodException: System.Array.Empty`
+**Symptom**: BepInEx loaded the plugin, then `Awake` immediately threw and died. `LogOutput.log` showed zero `ZAWA>` lines — only BepInEx's own `Loading [KK_ZaWarudo 0.1.0]`.
 
-**修法**: 改用 coroutine,`yield return new WWW(uri)`,讓 main thread 跑完 pump 再讀 clip。`AudioManager.StartLoad()` 在 `Plugin.Awake` 被叫一次就好,clip 在玩家進 HScene 前早就載完。
+**Cause**: csproj originally targeted `net46`. The C# compiler lowers empty-array literals into calls to `Array.Empty<T>()`. KK runs on Unity 5.6 / Mono .NET 3.5, which **does not have** `Array.Empty`.
 
-**教訓**: Unity main thread 上的 `WWW` 永遠用 `yield return www` 等待,**不要**用 spin loop。即使檔案是 local file:// 也一樣。
+**Fix**: csproj → `<TargetFramework>net35</TargetFramework>`, matching every other KK plugin (KK_HSceneOptions etc.).
 
----
-
-### B3 — ChangeAnimator 重複觸發導致 cache 線性成長 (稽核發現,commit `~`)
-**症狀**: 切體位 / 換對象 N 次後,resume 時 log 顯示 `re-enabled bones=` 數字爆漲。功能仍正確 (重複 enable 同一個 bone 是 idempotent),但 GC pressure 與 list traversal 隨時間退化。
-
-**原因**: `FreezeFemaleBones` / `FreezeFemaleAudio` / `FreezeParticles` 用 `List.Add` 沒去重。`ReapplyIfFrozen` (在 `HSceneProc.ChangeAnimator` postfix 呼叫) 每次切體位/換人都會把當下所有 Component 再塞一次。
-
-**修法**: cache 改 `HashSet<T>`,`if (set.Add(x)) DoAction(x)` 模式,自然去重。`_animSpeeds` 已是 Dictionary 用 `ContainsKey` 防重沒問題。
-
-**教訓**: 任何會被反覆呼叫的 cache 方法,容器選 `HashSet` / `Dictionary`,絕對不要用 `List`。
+**Lesson**: Every KK plugin must target net35. A successful build does NOT mean it'll run — the runtime BCL surface is much smaller than net46.
 
 ---
 
-### B5 — `animFace` 反射查找永遠回傳 null (collaborator AI 稽核發現,自行交叉驗證後微調結論)
-**症狀**: collaborator 報告「臉/舌頭動畫不被凍結」。
+### B2 — SFX loader returned a stub AudioClip (length=0, name="")
+**Symptom**: log said `enter=True during=True ...` but `[Enter] playing (0.00s, vol=1.00)` finished instantly and nothing was audible.
 
-**第一輪查證 (collaborator AI 主張)**: ChaInfo 上沒有 `animFace`,只有 `animBody` 和 `animTongueEx`。
+**Cause**: original `TryLoad` was synchronous and spin-waited on the main thread (`while (clip.loadState != Loaded)`). Unity's `WWW` download pump **runs on the main thread**, so the spin loop starves the pump → loadState never reaches `Loaded` → after the guard counter trips, the clip returned has length 0 and an empty name (header not parsed yet).
 
-**第二輪交叉驗證**: 不能無腦相信單一來源。我又查了:
-1. ilspy 對 `Koikatu_Data/Managed/Assembly-CSharp.dll`:確認 ChaInfo 只有
+**Fix**: rewrote loading as a coroutine that does `yield return new WWW(uri)`, letting the main thread pump WWW to completion before reading the clip. `AudioManager.StartLoad()` is invoked once from `Plugin.Awake`, so by the time the player enters an HScene the clips are long since loaded.
+
+**Lesson**: On Unity's main thread, **always await `WWW` via `yield return www`**; never spin. This is true even for local `file://` URLs.
+
+---
+
+### B3 — `ChangeAnimator` re-triggering grew the cache linearly
+**Symptom**: After N position/partner switches, the resume log showed wildly inflated `re-enabled bones=` counts. Behaviorally still correct (re-enabling the same bone is idempotent), but with degraded GC pressure and list-traversal cost over time.
+
+**Cause**: `FreezeFemaleBones` / `FreezeFemaleAudio` / `FreezeParticles` used `List.Add` with no dedupe. `ReapplyIfFrozen` (called from the `HSceneProc.ChangeAnimator` postfix) re-added every Component on every switch.
+
+**Fix**: caches changed to `HashSet<T>`, with the pattern `if (set.Add(x)) DoAction(x)` for natural dedupe. `_animSpeeds` was already a Dictionary using `ContainsKey`, so it was fine.
+
+**Lesson**: Any cache that may be touched multiple times needs `HashSet`/`Dictionary`, not `List`.
+
+---
+
+### B4 — `Bind` had no re-entry guard, old Instance got silently overwritten
+**Symptom**: In theory unreachable — would require `MapSameObjectDisable` to fire twice without a matching `OnDestroy` (BepInEx hot reload, KKAPI re-init, or another plugin force-reinitting the HScene). If it ever did fire, the previous scene's cache would be lost; whatever animators/bones we'd frozen would **stay frozen forever**, since the next Resume would iterate an empty cache.
+
+**Fix**: at the top of `Bind`, if `Instance != null`, call `Unbind()` first (which triggers `Resume()` and restores the old state) before installing the new Instance. Logs a warning when this fires.
+
+**Lesson**: Singleton `Bind`/`Init` methods must be idempotent — clean up the old state before swapping in the new one.
+
+---
+
+### B5 — `animFace` reflection lookup always returned null (raised by collaborator AI, refined after cross-checking)
+**Symptom**: collaborator reported "face/tongue animation is not being frozen".
+
+**First-pass claim (from collaborator AI)**: ChaInfo has no `animFace`, only `animBody` and `animTongueEx`.
+
+**Second-pass cross-check**: don't trust a single source. Verified independently:
+1. ilspy on `Koikatu_Data/Managed/Assembly-CSharp.dll`: ChaInfo has only
    ```csharp
    public Animator animBody { get; protected set; }
    public Animator animTongueEx { get; protected set; }
    ```
-2. ilspy 對 IllusionLibs NuGet stub (`illusionlibs.koikatu.assembly-csharp/2019.4.27.4`):一致
-3. KK_HSceneOptions 整個 codebase grep:只看到一處 `animBody.GetCurrentAnimatorStateInfo`,完全沒碰其他 anim*
-4. KK_Plugins、IllusionModdingAPI:0 hits,沒人碰任何 anim* 欄位
-5. **whole-assembly grep `animTongueEx`**: 只有 3 處 reference
-   - 屬性宣告
-   - `objTongueEx.GetComponent<Animator>()` 賦值一次
-   - cleanup 設 null
+2. ilspy on the IllusionLibs NuGet stub (`illusionlibs.koikatu.assembly-csharp/2019.4.27.4`): consistent.
+3. `KK_HSceneOptions` codebase grep: only one hit, `animBody.GetCurrentAnimatorStateInfo`. Touches no other `anim*`.
+4. `KK_Plugins`, `IllusionModdingAPI`: 0 hits — no one touches any `anim*` field.
+5. **Whole-assembly grep for `animTongueEx`**: only 3 references — the property declaration, a single `objTongueEx.GetComponent<Animator>()` assignment, and a cleanup setting it to null.
 
-**修正後的結論**:
-- ✅ collaborator 對的部分:`animFace` 不存在,反射查找是 no-op,我之前的 code 等於什麼都沒做
-- ⚠️ collaborator 誤導的部分:他建議用 `animTongueEx` 替代,但實際上**遊戲本身從來沒對它呼叫 `.speed`/`.Play`/`.SetTrigger`**。那只是個被 cache 但沒被驅動的 Animator handle。設它 speed=0 在現行遊戲版本是 **no-op**,跟原本反射查找的結果是一樣的
-- 真正凍結臉/表情/lip-sync 的關鍵是 **`animBody.speed = 0`** — animBody 用 layer 系統把臉部 controller 疊在身上,layer 上的 AnimationEvent (眨眼、口型、表情) 會跟著主 animator 的 speed 一起停。KK_HSceneOptions 多年只動 animBody 沒人抱怨,印證這點。
+**Refined conclusion**:
+- ✅ Collaborator was right: `animFace` doesn't exist; the reflection lookup was a no-op and our previous code was doing nothing.
+- ⚠️ Collaborator was misleading: their suggested fix was to use `animTongueEx` instead, but **the game itself never calls `.speed` / `.Play` / `.SetTrigger` on it**. It's a cached but never-driven `Animator` handle. Setting `speed = 0` on it is also a no-op in the current game version.
+- The actual lever for face/expression/lip-sync is `animBody.speed = 0`. animBody uses Unity's layer system, with the face controller layered on top of the body — `AnimationEvent`s (blinks, mouth shapes, expression changes) on those layers stop together with the master animator. KK_HSceneOptions has only ever touched `animBody` and no one has complained, which corroborates this.
 
-**修法**:
-- 直接呼叫 `c.animBody` (取代反射)
-- 順便也呼叫 `c.animTongueEx` 作為「belt-and-braces」備援 (將來遊戲若 patch 開始驅動 tongue,自動 cover),但不要假設它有效
-- 註解寫清楚 animTongueEx 是 no-op 預備位
+**Fix**:
+- Direct `c.animBody` access (replacing the reflection lookup).
+- Also call `c.animTongueEx` as a "belt-and-braces" backup (in case a future game patch starts driving it), but don't assume it has any current effect.
+- Comment in code clearly labels `animTongueEx` as a no-op standby slot.
 
-**教訓**:
-1. **不要憑記憶寫欄位名**,永遠 ilspy
-2. **也不要無腦相信 collaborator 的建議** — 對方的論證可能正確指出問題,但提出的修法可能基於不完整的證據
-3. 任何「為了安全多 cover 一個欄位」的決定要寫清楚是 evidence-based 還是 belt-and-braces,以免下次稽核又被當成 dead code 砍掉
+**Lessons**:
+1. Don't write KK API field names from memory — always ilspy first.
+2. Don't blindly trust collaborator suggestions either — they may correctly identify a problem but propose a fix based on incomplete evidence.
+3. Any "let's also cover field X just to be safe" decision must be labelled as evidence-based or belt-and-braces, otherwise the next audit will treat it as dead code and remove it.
 
 ---
 
-### B6 — `ReapplyIfFrozen` 漏掉 voice / audio steps (collaborator AI 稽核發現)
-**症狀**: 凍結中切體位或換對象後,新女角的 moan / mouth voice / 其他 AudioSource 會穿透凍結一路播到 resume。
+### B6 — `ReapplyIfFrozen` was missing the voice / audio steps (raised by collaborator AI)
+**Symptom**: After switching position / partner while frozen, the new female's moan / mouth voice / other AudioSources would punch through the freeze and play until resume.
 
-**原因**: `Freeze()` 走完 step 1 到 4c (animator + bone + particle + StopFemaleVoices + FreezeFemaleAudio),但 `ReapplyIfFrozen` 只重跑 step 1–4 (animator + bone + particle),漏了 4b 和 4c。
+**Cause**: `Freeze()` runs steps 1 through 4c (animator + bone + particle + StopFemaleVoices + FreezeFemaleAudio), but `ReapplyIfFrozen` only re-ran steps 1–4 (animator + bone + particle), missing 4b and 4c.
 
-**修法**: `ReapplyIfFrozen` 補上 `StopFemaleVoices()` 跟 `FreezeFemaleAudio()` 呼叫。HashSet cache (B3 修過) 會自動 dedupe,重複呼叫不會堆積。
+**Fix**: `ReapplyIfFrozen` now calls `StopFemaleVoices()` and `FreezeFemaleAudio()` as well. The HashSet caches (B3) handle dedupe so repeated calls don't pile up.
 
-**教訓**: freeze 步驟新增/刪減時,**同步更新 ReapplyIfFrozen**。兩個方法的步驟順序與覆蓋集合必須鏡像。考慮把兩者抽成一個 `ApplyFreezeSteps()` helper 共用,避免再分岔 (TODO)。
-
----
-
-### B7 — `_extraMales` 註解假造「KPlug additions」(collaborator AI 稽核發現)
-**症狀**: 註解寫 `_extraMales = male1 (darkness) + KPlug additions`,實際上 init 只抓 `male1` 一個欄位。spec/註解和實作分岔。
-
-**驗證**: ilspy 檢查 vanilla `HSceneProc`,只有兩個 ChaControl 男角欄位:`male` 跟 `male1`。沒有 `male2/male3/maleNpc`。
-
-**修法**: 改寫註解誠實描述目前能力 (`_extraMales currently sourced from HSceneProc.male1 only`)。要支援 KPlug 等 mod 額外男角時,得另外查那些 mod 用什麼欄位/容器、可能需要 hook 不同 class,**不是** 在 vanilla HSceneProc 上掃 male* 欄位就能解決。
-
-**教訓**: 不要在註解寫「未來擴充」式的虛構能力。註解寫的是 code 現在做什麼,不是 code 想做什麼。
+**Lesson**: When you add or remove a step from `Freeze()`, **update `ReapplyIfFrozen` in the same commit**. Their step sets must mirror each other exactly. Long-term: extract a shared `ApplyFreezeSteps()` helper to prevent further drift (TODO).
 
 ---
 
-### B4 — Bind 沒有防重入,舊 Instance 會被無聲覆蓋 (稽核發現,commit `~`)
-**症狀**: 理論上不會觸發 — 需要 `MapSameObjectDisable` 在沒先 `OnDestroy` 的情況下 fire 兩次 (BepInEx hot reload、KKAPI re-init、或其他 plugin 強制重 init HScene)。一旦觸發,前一場的 cache 全部丟失,被 freeze 的 animator/bone **永遠停在 frozen 狀態**,直到下一次 Resume — 但下一次 Resume 看到的是新 Instance,iter 的是空 cache,什麼也救不回來。
+### B7 — `_extraMales` comment fabricated "KPlug additions" (raised by collaborator AI)
+**Symptom**: comment claimed `_extraMales = male1 (darkness) + KPlug additions`, but the init code only grabbed `male1`. Comment and implementation were divergent.
 
-**修法**: `Bind` 進入時若 `Instance != null`,先呼叫 `Unbind()` (它會 trigger `Resume()` 還原舊狀態) 再蓋上新 Instance,並 log warning。
+**Verification**: ilspy on vanilla `HSceneProc` shows exactly two `ChaControl`-typed male slots: `male` and `male1`. No `male2`/`male3`/`maleNpc`.
 
-**教訓**: singleton 的 `Bind`/`Init` 方法永遠要 idempotent — 重入時先清舊狀態。
+**Fix**: rewrote the comment to honestly describe current capability (`_extraMales currently sourced from HSceneProc.male1 only`). Supporting KPlug-style mods that add extra males will require finding where those mods stash them — possibly hooking a different class entirely — **not** just grepping `HSceneProc` for more `male*` fields.
 
----
-
-## 未修的已知風險 / Follow-up
-
-### R1 — AudioManager 持有 AudioClip 的 strong ref 永不釋放
-- **嚴重度**: 微
-- **現況**: 4 個小 wav 檔,plugin 整個 process 生命週期就一份,實質非 leak
-- **觸發條件**: 未來若加「執行中 reload SFX」(例如 ConfigManager 改檔名後熱重載) 而沒 `Object.Destroy(oldClip)`,每次 reload 會多堆一份 AudioClip 在 memory
-- **預防**: 加 reload 路徑時記得 `if (oldClip != null) UnityEngine.Object.Destroy(oldClip);`
-
-### R2 — 男主角偵測寫死 = `HSceneProc.male`
-- **嚴重度**: 中
-- **觸發條件**: 玩家視角實際綁的不是 `male` 而是某個女角時 (例如 darkness 模式女主視點 / 某些 mod 改視角),會凍住玩家自己
-- **預防**: 要支援時加 config `Untouched Character Index`,或從 KKAPI 抓 `currentActiveCharacter`
-
-### R3 — KPlug / 其他 mod 加的額外男角不會被凍結
-- **嚴重度**: 中
-- **現況**: 只抓 vanilla `HSceneProc.male1`,KPlug 若把額外男角放在別的 class/容器/runtime 注入,本 plugin 不會看到
-- **觸發條件**: 跑 KPlug 多男角場景,多出來的男配角持續正常動作
-- **預防**: 實機觀察到漏網時,要查 KPlug 原始碼確認額外男角的存放位置,可能要 hook 不同 class 而非 HSceneProc
-
-### R4 — ~~`animFace` 用 reflection 拿~~ (已修,見 B5)
-~~此風險已不存在~~ — `animFace` 根本不存在於 ChaInfo,改直接抓 `animBody` + `animTongueEx`。
-
-### R5 — `Manager.Voice.Instance.Stop(transVoiceMouth[i])` 只覆蓋當前主動 mouth slot
-- **嚴重度**: 低 (已用 step 4c `FreezeFemaleAudio` 補強)
-- **原因**: `transVoiceMouth` 是固定長度 2 的陣列,只代表「現在綁定到嘴部的兩個 voice slot」,3P/4P 中非主動女角的語音不在裡面
-- **現況**: step 4c 走 `GetComponentsInChildren<AudioSource>()` 全 pause,實際上已經涵蓋
-- **後續**: 若觀察到還有漏網的 NPC 語音,擴大到場景級 `_proc.GetComponentsInChildren<AudioSource>()` 並排除 male 階層
-
-### R6 — 切體位過程的 race window
-- **嚴重度**: 低
-- **觸發條件**: 玩家在凍結中按切體位 → `ChangeAnimator` postfix 跑 `ReapplyIfFrozen` 重新對新 animator set speed=0。但若 KK 在 postfix 之後還有 1–2 frame 才完成 animator 切換 (尚未實測),新女角會「短暫動一下」
-- **預防**: 若實機看到此症狀,改 coroutine 延後一兩 frame 再 ReapplyIfFrozen,或在 controller 內掛 LateUpdate watchdog
-
-### R7 — Hotkey 衝突 (T 與其他 plugin push-to-talk)
-- **嚴重度**: 微
-- **現況**: 預設 `T`,使用者可在 ConfigurationManager 改
-- **預防**: README 提醒,或預設改成 `Ctrl+T` 之類降衝突機率
+**Lesson**: Don't write comments that describe future capabilities. Comments describe what the code does now, not what you wish it did.
 
 ---
 
-## 開發環境鐵則 (Don't break these)
+## Known unresolved risks / Follow-ups
 
-1. **必須 target net35** — 任何 PR 想升 net46/net472 直接 reject。原因見 B1。
-2. **不准在 main thread 上 spin-wait Unity API** — 任何 `while (notReady) { }` 都要改成 coroutine `yield`。原因見 B2。
-3. **任何反覆呼叫的 cache 方法用 HashSet/Dictionary** — 不准 List.Add 然後祈禱去重。原因見 B3。
-4. **singleton Bind 必須 idempotent** — 進入時先 Unbind 舊 Instance。原因見 B4。
-5. **男主角 (`HSceneProc.male`) 永遠不被加進凍結對象集合** — 寫死在 `FrozenSubjects()` 的設計裡,別誤改。
-6. **所有 log 帶 `ZAWA>` prefix** — 透過 `Plugin.LogI/LogW/LogE` 而不是 `Logger.LogInfo` 直接呼叫。方便 grep 跟其他 plugin 的 log 區分。
-7. **UnpatchSelf on OnDestroy** — Plugin.OnDestroy 必須 unpatch Harmony,否則 reload 時舊 patch 會疊上去。
-8. **不准憑記憶寫 KK API 欄位名** — 查 ilspy。`ChaInfo` 上的 Animator 只有 `animBody` 和 `animTongueEx`,沒有 `animFace`/`animOption`。`HSceneProc` 上的男角只有 `male`/`male1`。原因見 B5、B7。
-9. **`Freeze()` 步驟調整時必須同步更新 `ReapplyIfFrozen()`** — 兩者覆蓋的 step 集合必須鏡像,否則切體位/換對象後新 subjects 會漏網。原因見 B6。長期看應抽 helper 共用。
-10. **註解寫程式現在做什麼,不寫想做什麼** — 別在註解裡編造尚未實作的能力 (例: 「supports KPlug additions」),會誤導稽核者也誤導未來的自己。原因見 B7。
-11. **Collaborator AI / 外部建議要交叉驗證** — 對方指出的「問題」可能是真的,但他提出的「修法」可能基於部分證據。永遠用 ilspy + reference plugin grep + 整個 assembly 的使用情境再驗一次。原因見 B5 第二輪查證。
+### R1 — `AudioManager` holds strong refs to `AudioClip`s forever
+- **Severity**: trivial
+- **Status**: 4 small wav files for the lifetime of the process. Not actually a leak.
+- **When it'd matter**: if we ever add "reload SFX at runtime" (e.g. respond to ConfigurationManager changes), each reload would leak one set of clips unless we destroy the old ones.
+- **Prevention**: in any future reload path, `if (oldClip != null) UnityEngine.Object.Destroy(oldClip);`
+
+### R2 — Protagonist detection is hardcoded to `HSceneProc.male`
+- **Severity**: medium
+- **Trigger**: any scenario where the actual player camera is bound to a female and not `male` (e.g. darkness female-protagonist viewpoint, or a mod that switches the camera). We'd freeze the player themselves.
+- **Prevention**: add a config like `Untouched Character Index`, or query KKAPI for the active controlled character.
+
+### R3 — KPlug / other mods with extra male slots aren't covered
+- **Severity**: medium
+- **Status**: only vanilla `HSceneProc.male1` is grabbed. If KPlug stores extra males in a different class, container, or runtime injection, we won't see them.
+- **Trigger**: KPlug multi-male scenarios — extra male NPCs continue to act normally during freeze.
+- **Prevention**: when this is observed, dig into the offending mod's source to find where it stores extra males. Likely needs hooking a different class instead of `HSceneProc`.
+
+### R4 — ~~`animFace` reflection lookup~~ (fixed, see B5)
+~~No longer a risk~~ — `animFace` doesn't exist on ChaInfo at all. We now access `animBody` and `animTongueEx` directly.
+
+### R5 — `Manager.Voice.Instance.Stop(transVoiceMouth[i])` only covers the active mouth slot
+- **Severity**: low (already mitigated by step 4c `FreezeFemaleAudio`)
+- **Cause**: `transVoiceMouth` is a fixed length-2 array representing the two voice slots currently bound to mouths. In 3P/4P, non-active females' voices aren't in there.
+- **Status**: step 4c walks `GetComponentsInChildren<AudioSource>()` and pauses everything, which already covers this in practice. The voice prefix patches on `HVoiceCtrl.VoiceProc/BreathProc` also block new voice queueing.
+- **Follow-up**: if we still see leakage in some scenarios, broaden to a scene-level `_proc.GetComponentsInChildren<AudioSource>()` excluding the male hierarchy.
+
+### R6 — Race window during position switch
+- **Severity**: low
+- **Trigger**: while frozen, the player triggers a position change → `ChangeAnimator` postfix calls `ReapplyIfFrozen` to set speed=0 on the new animator set. If KK takes 1–2 frames after the postfix to actually swap animators (not yet observed in practice), the new female could "twitch briefly" before being re-pinned.
+- **Prevention**: if observed, defer `ReapplyIfFrozen` by one or two frames via a coroutine, or install a `LateUpdate` watchdog inside the controller.
+
+### R7 — Hotkey collision (T conflicts with other plugins' push-to-talk)
+- **Severity**: trivial
+- **Status**: default is `T`; user can rebind in ConfigurationManager.
+- **Prevention**: README mention, or change default to e.g. `Ctrl+T` to reduce collision risk.
 
 ---
 
-## 開發工具 / Workflow
+## Inviolable development rules ("don't break these")
 
-### 反編譯 KK runtime dll
-KK 安裝目錄底下所有 dll 都可以直接 decompile 來研究 — 不只 `Koikatu_Data/Managed/Assembly-CSharp.dll`,連 `BepInEx/plugins/*.dll` (其他人的 plugin) 也可以。這是查 KK API、學別人實作模式、找未知欄位的**最直接證據來源**,優先級高於 NuGet stub 跟 reference repo。
+1. **Must target net35.** Reject any PR that bumps to net46/net472. See B1.
+2. **No spin-waiting on Unity APIs from the main thread.** Any `while (notReady) { }` must become a coroutine `yield`. See B2.
+3. **Caches that get re-touched must be `HashSet`/`Dictionary`.** Never `List.Add` and hope for dedupe. See B3.
+4. **Singleton `Bind` must be idempotent.** Call `Unbind` first if there's an existing instance. See B4.
+5. **The protagonist (`HSceneProc.male`) is never added to the frozen-subjects set.** Hardcoded into `FrozenSubjects()` — don't accidentally include him.
+6. **Every log line carries the `ZAWA>` prefix.** Use `Plugin.LogI/LogW/LogE`, not `Logger.LogInfo` directly. Makes our output greppable amid other plugins' noise.
+7. **`UnpatchSelf` on `OnDestroy`.** `Plugin.OnDestroy` must unpatch Harmony, otherwise reload stacks old patches on top of new ones.
+8. **Don't write KK API field names from memory.** Use ilspy. ChaInfo's only Animators are `animBody` and `animTongueEx` — there's no `animFace`/`animOption`. `HSceneProc`'s only male slots are `male` and `male1`. See B5, B7.
+9. **When `Freeze()` steps change, update `ReapplyIfFrozen()` in the same commit.** Their step sets must mirror each other or partner-switch will leak unfrozen subjects. See B6. Long-term: extract a shared helper.
+10. **Comments describe what the code does now, not what you wish it did.** Don't fabricate "supports X" claims that future readers (or auditors) will discover are lies. See B7.
+11. **Cross-verify collaborator AI / external suggestions.** They may correctly identify a problem, but the proposed fix may rest on incomplete evidence. Always re-check with ilspy + reference plugin grep + whole-assembly usage analysis. See the second pass on B5.
 
-**安裝 ilspycmd** (一次):
+---
+
+## Development tooling / Workflow
+
+### Decompiling KK runtime DLLs
+Every DLL under the KK install directory can be decompiled directly — not only `Koikatu_Data/Managed/Assembly-CSharp.dll`, but also `BepInEx/plugins/*.dll` (other people's plugins). This is the **most direct source of evidence** for KK API behavior, learning implementation patterns, and finding undocumented fields. It outranks the NuGet stub assemblies and the reference repos.
+
+**Install ilspycmd** (one-off):
 ```bash
 dotnet tool install -g ilspycmd --version 8.2.0.7535
 ```
-注意:`latest` 版本目前 NuGet 套件 broken,要 pin `8.2.0.7535`。原因見 [b4 install attempt history]。
+Note: the `latest` NuGet package is currently broken (missing `DotnetToolSettings.xml`). Pin `8.2.0.7535`.
 
-**Decompile 一個 type**:
+**Decompile a single type**:
 ```bash
 /c/Users/weiss/.dotnet/tools/ilspycmd \
   "/c/Program Files (x86)/Steam/steamapps/common/Koikatsu/Koikatu_Data/Managed/Assembly-CSharp.dll" \
   -t HSceneProc > /tmp/hsceneproc.cs
 ```
 
-**Decompile 整個 dll** (慢,但可以 grep 任何欄位的全局使用):
+**Decompile the entire DLL** (slow, but lets you grep field usage globally):
 ```bash
 /c/Users/weiss/.dotnet/tools/ilspycmd \
   "/c/Program Files (x86)/Steam/steamapps/common/Koikatsu/Koikatu_Data/Managed/Assembly-CSharp.dll" \
@@ -188,41 +185,37 @@ dotnet tool install -g ilspycmd --version 8.2.0.7535
 grep -n "animTongueEx\|gaugeFemale\|whatever" /tmp/full_asm.cs
 ```
 
-**重要 dll 路徑**:
-- `Koikatu_Data/Managed/Assembly-CSharp.dll` — 主遊戲邏輯 (HSceneProc, ChaControl, HFlag, Manager.* 等)
-- `Koikatu_Data/Managed/Assembly-CSharp-firstpass.dll` — UnityEngine extensions, DynamicBone 等
+**Important DLL paths**:
+- `Koikatu_Data/Managed/Assembly-CSharp.dll` — main game logic (HSceneProc, ChaControl, HFlag, Manager.*, etc.)
+- `Koikatu_Data/Managed/Assembly-CSharp-firstpass.dll` — UnityEngine extensions, DynamicBone, etc.
 - `BepInEx/core/BepInEx.dll` — BepInEx API
-- `BepInEx/plugins/*.dll` — 其他人的 plugin (學模式、找 hook 點)
+- `BepInEx/plugins/*.dll` — other people's plugins (good for learning patterns and finding hook points)
 
-別人的 plugin 已經 commit 過的可以放到 `references/`,沒有原始碼的就 decompile 後放到 `references/<name>/<name>.decompiled.cs` (見 [SlapMod 的 case](../references/SlapMod/SlapMod.decompiled.cs))。
+Other people's plugins that have public source can go into `references/`. For closed-source ones, decompile and stash under `references/<name>/<name>.decompiled.cs` (see [the SlapMod case](../references/SlapMod/SlapMod.decompiled.cs)).
 
-### KKAPI 已經提供的功能 (不要重複造輪子)
-KKAPI ([references/IllusionModdingAPI/](../references/IllusionModdingAPI/)) 是大多數 KK plugin 的標配。寫新功能前先 grep 一下,別自己 patch 已經被 wrap 過的東西。
+### What KKAPI already provides (don't reinvent it)
+KKAPI ([references/IllusionModdingAPI/](../references/IllusionModdingAPI/)) is the standard library most KK plugins build on. Before writing a new feature, grep its source — don't patch something it already wraps for you.
 
-| 你想做的事 | KKAPI 已經有 | 位置 |
+| You want to | KKAPI provides | Location |
 |---|---|---|
-| 偵測 H scene 開始/結束 | `GameCustomFunctionController.OnStartH/OnEndH` (含 VR 支援) | `KKAPI/MainGame/GameCustomFunctionController.cs` |
-| 知道現在是不是在 HScene | `GameAPI.InsideHScene` (static bool) | `KKAPI/MainGame/GameApi.cs` |
-| 註冊自己的 game-level controller | `GameAPI.RegisterExtraBehaviour<T>(extendedDataId)` | 同上 |
-| HFlag 模式判斷 (peeping/shower 等) | `HFlag` extension methods | `KKAPI/MainGame/Utilities/GameExtensions.cs` |
-| Maker (角色卡編輯器) hook | `MakerAPI` 整套 | `KKAPI/Maker/` |
-| Studio hook | `StudioAPI` | `KKAPI/Studio/` |
-| ConfigurationManager attribute | `ConfigurationManagerAttributes` 範本 | 多個 plugin 提供 |
+| Detect H-scene start/end | `GameCustomFunctionController.OnStartH/OnEndH` (VR-aware) | `KKAPI/MainGame/GameCustomFunctionController.cs` |
+| Know whether you're inside HScene | `GameAPI.InsideHScene` (static bool) | `KKAPI/MainGame/GameApi.cs` |
+| Register your own game-level controller | `GameAPI.RegisterExtraBehaviour<T>(extendedDataId)` | (same) |
+| HFlag mode helpers (peeping/shower etc.) | `HFlag` extension methods | `KKAPI/MainGame/Utilities/GameExtensions.cs` |
+| Maker (character editor) hooks | the entire `MakerAPI` namespace | `KKAPI/Maker/` |
+| Studio hooks | `StudioAPI` | `KKAPI/Studio/` |
+| ConfigurationManager attribute template | `ConfigurationManagerAttributes` template | shipped by several plugins |
 
-**KKAPI 沒提供** (本 plugin 必須自己做):
-- HScene 內部欄位存取 (`lstFemale`, `male`, `male1`, `flags.transVoiceMouth` 等) — 自己 Traverse
-- `HSceneProc.ChangeAnimator` 的 callback — 沒有,自己 patch
-- WAV 載入 — 沒有,參考 SlapMod 範式
-- Animator / DynamicBone / AudioSource 凍結 — 純 Unity,不會也不該由 KKAPI 提供
-- Free voice channel 控制 — KK 用 `Manager.Voice.Instance.Stop(transform)`
+**What KKAPI does NOT provide** (we still implement these ourselves):
+- Direct access to HScene private fields (`lstFemale`, `male`, `male1`, `flags.transVoiceMouth`, etc.) — use `Traverse`.
+- Callback for `HSceneProc.ChangeAnimator` — none, we patch it ourselves.
+- WAV loading — none; copy SlapMod's pattern.
+- Animator / DynamicBone / AudioSource freezing — pure Unity, not KKAPI's job.
+- Freeing voice channels — KK-side: `Manager.Voice.Instance.Stop(transform)`.
 
-**目前重複的部分** (TODO,改用 KKAPI):
-- 我們自己 Harmony patch `HSceneProc.MapSameObjectDisable` + `OnDestroy` — 應該改成 `GameCustomFunctionController` 子類,免費送 VR 支援
-- `Update()` 裡用 `TimeStopController.Instance != null` 當「在不在 HScene」的 proxy — 應該用 `GameAPI.InsideHScene`
-
-### 查證流程 (任何懷疑 KK API 行為時)
-1. **ilspy 真實 game dll** — 第一手證據,類別實際長相
-2. **ilspy 想看的 type 用 `-t TypeName`** — 看單一類別的成員、欄位、方法簽名
-3. **whole-assembly grep** — 看某個欄位/方法在遊戲內被誰呼叫、被怎麼用,辨別「存在但沒被使用」vs「真的有作用」
-4. **reference plugin grep** (`references/`) — 看別人怎麼用同樣的 API,有沒有踩過坑的註解
-5. 上面 1–4 都通才相信
+### Verification flow (any time you're unsure about KK API behavior)
+1. **ilspy the actual game DLL** — first-hand evidence of class shape.
+2. **`-t TypeName`** — inspect a single type's members, fields, method signatures.
+3. **Whole-assembly grep** — find every caller / consumer of a field or method to distinguish "exists but unused" from "actually does something".
+4. **Reference plugin grep** (`references/`) — see how others use the same API; check for warning comments from prior pitfalls.
+5. Only trust a claim once 1–4 all line up.
