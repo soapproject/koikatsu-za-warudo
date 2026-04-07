@@ -11,13 +11,15 @@
 
 ## 核心決策
 - **目標遊戲**: Koikatsu (KK) / Koikatsu Party。**不**支援 KKS。
-- **生效範圍**: 僅 HScene (`HSceneProc` 存在時),不涉及 Studio / Maker / Main game。
+- **生效範圍**: 僅 HScene (`HSceneProc` 或 `VRHScene` 存在時),不涉及 Studio / Maker / Main game。
 - **主角定義**: `HSceneProc.male`,即便是女主角體位也視為「玩家視角控制者」,**永遠不被凍結**。
-- **時間軸**: 不動 `Time.timeScale` (避免破壞相機/UI),只動 per-Animator speed 與相關物理。
-- **BGM**: 不停,維持沉浸氛圍;凍結只作用於角色動畫、物理、快感系統與人物語音。
+- **時間軸**: 不動 `Time.timeScale` (避免破壞相機/UI),只動 per-Animator speed、KK 子系統 prefix-skip 與相關物理。
+- **BGM**: 不停,維持沉浸氛圍;凍結只作用於角色動畫、物理、快感系統與人物語音/SE。
 - **時停期間玩家自由度**: 允許切換體位、操作 UI、**切換對象女角** (3P/4P 中換人)。
 - **快感注入目標**: `HFlag.gaugeFemale` (快感量,非敏感度 multiplier)。
 - **不主動 trigger finish**: Instant 模式拉滿 gauge 後是否進入高潮交給遊戲/其他 plugin 自然處理。
+- **VR 支援**: 透過 KKAPI `GameCustomFunctionController` 自動 dispatch 到 `VRHScene`,本 plugin 額外 patch `VRHScene.ChangeAnimator` (用 `Type.GetType` reflection,non-VR build 自動跳過)。
+- **HScene lifecycle**: 不自己 patch HSceneProc.MapSameObjectDisable / OnDestroy,改用 KKAPI 的 `OnStartH(MonoBehaviour, HFlag, bool)` / `OnEndH` callback (見 NOTES.md「KKAPI 已經提供的功能」)。
 
 ---
 
@@ -28,19 +30,25 @@
 - 同一場 HScene 內可重複進入/離開時停
 
 ### 2. 進入時停 (Freeze)
-| 對象 | 行為 |
-|---|---|
-| 女角 (`lstFemale`) 動畫 | `Animator.speed = 0` (animBody / animFace) |
-| 女角 DynamicBone / DynamicBone_Ver02 | 快取 enabled,disable |
-| 男角 = 主角 (`male`) | **不凍結**,動畫與物理保持原狀 |
-| `HFlag.speedCalc` | 設為 0 (停止快感 tick) |
-| 場景 ParticleSystem | 全部 `Pause()` (汗、體液) |
-| 自訂音效 | 播放「進入時停」SFX 一次 |
+凍結對象 = `lstFemale` 全員 + 非主角男角 (`male1`,darkness 模式)。主角 (`male`) 永遠不動。
 
-進入瞬間記錄 `freezeStartTime = Time.realtimeSinceStartup`,所有被改動的狀態都要快取以供 Resume 還原。
+| Step | 對象 | 行為 |
+|---|---|---|
+| 1 | 對象的 `Animator` | `animBody.speed = 0`、`animTongueEx.speed = 0` (兩個是 ChaInfo 真實存在的全部 Animator,ilspy 驗證) |
+| 2 | `HFlag.speedCalc` | 快取後設為 0 (停止快感 tick) |
+| 3 | 對象的 `DynamicBone` / `DynamicBone_Ver02` | HashSet 快取 enabled,disable (頭髮、衣服、胸部物理) |
+| 4 | HScene 根節點底下所有 `ParticleSystem` | HashSet 快取,`Pause(true)` (汗、體液粒子) |
+| 4b | 對象的當前 mouth voice slot | `Manager.Voice.Instance.Stop(flags.transVoiceMouth[i])` 立即停掉 in-flight 語音 |
+| 4c | 對象階層底下的 `AudioSource` | HashSet 快取,`Pause()` (備援,KK 實際不掛在這層) |
+| — | `HVoiceCtrl.VoiceProc` / `BreathProc` | Harmony **prefix** 短路 (frozen 期間直接 return false),阻擋新語音 / 呼吸聲排隊 |
+| — | `HMotionEyeNeckFemale.Proc` / `HMotionEyeNeckMale.Proc` | Harmony **prefix** 短路,凍結眼神追相機、頭部朝向、表情 / 嘴型 / 眉毛 / 眼淚 pattern |
+| — | `HSeCtrl.Proc` | Harmony **prefix** 短路,阻擋 slap / 體位接觸 SE |
+| 5 | 自訂音效 | 觸發 Freeze SFX 序列 (Enter → During loop) |
+
+進入瞬間記錄 `freezeStartTime = Time.realtimeSinceStartup`。所有被改動的 Component 狀態都用 HashSet/Dictionary 快取以供 Resume 還原 (HashSet 的 dedupe 讓 ChangeAnimator 後的 Reapply 不會堆積)。
 
 ### 3. 切換對象女角 (時停期間)
-`HSceneProc.ChangeAnimator` postfix 在 frozen 狀態下重新對當前非主角套用 Animator.speed = 0、disable bones、pause particles,確保切換後的新女角不會動。
+`HSceneProc.ChangeAnimator` postfix 在 frozen 狀態下重新跑 step 1, 3, 4, 4b, 4c (`ReapplyIfFrozen()`),確保切換後的新對象 / 新 mouth voice slot 也被凍結。Animator/Bone/AudioSource cache 用 HashSet,重複呼叫不會堆積。`HSceneProc.ChangeAnimator` 跟 `VRHScene.ChangeAnimator` 都有 patch。
 
 ### 4. 解除時停 (Resume)
 依序執行:
@@ -55,6 +63,7 @@
 | Section | Key | Type | 預設 | 說明 |
 |---|---|---|---|---|
 | General | Toggle Key | KeyboardShortcut | `T` | 觸發熱鍵 |
+| General | Toggle Cooldown | float (0–5) | `0.3` | 連續按 T 的最小間隔秒數 (debounce),避免 SFX 切碎與 gauge spam |
 | General | Resume Mode | enum {Instant, Accumulated} | `Accumulated` | 解除時的快感注入方式 |
 | General | Accumulation Rate | float | `10.0` | Accumulated 模式下每秒累積的快感點數 |
 | Audio | SFX Folder | string | `<PluginPath>/bgm/zawarudo/` | 音效資料夾 (對齊 SlapMod 慣例的 `bgm/` 子目錄) |
@@ -118,7 +127,18 @@ plugin **不附帶版權音檔**,使用者自備丟到 `bgm/zawarudo/`。
 ---
 
 ## 主要參考實作
-- [references/KK_HSceneOptions/](../references/KK_HSceneOptions/) — `AnimationToggle.cs`、`Hooks.cs`:HSceneProc patch + animator speed 操作的最佳前例;`MapSameObjectDisable` 為 init hook 點
-- [references/KK_Plugins/](../references/KK_Plugins/) — csproj/build 慣例
-- [references/IllusionModdingAPI/](../references/IllusionModdingAPI/) — KKAPI helper 與 ChaControl 擴充
+- [references/KK_HSceneOptions/](../references/KK_HSceneOptions/) — `Hooks.cs`:`HVoiceCtrl.VoiceProc/BreathProc` prefix mute pattern (見 [Hooks.cs:120](../references/KK_HSceneOptions/KK_HSceneOptions/Hooks.cs#L120)) 直接引用;`Hooks_VR.cs` 確認 VRHScene 欄位名一致
+- [references/KK_Plugins/](../references/KK_Plugins/) — csproj/build 慣例,IllusionMods nuget feed 出處
+- [references/IllusionModdingAPI/](../references/IllusionModdingAPI/) — `GameCustomFunctionController` 提供 `OnStartH/OnEndH` 自動 VR-aware callback
 - [references/SlapMod/SlapMod.decompiled.cs](../references/SlapMod/SlapMod.decompiled.cs) — wav 載入與 AudioSource 播放範式
+
+## 主要 ilspy 發現的 KK 內部類別 (本 plugin 直接 patch)
+| 類別 | 用途 | patch 方式 |
+|---|---|---|
+| `HSceneProc.ChangeAnimator` | 切體位/換動畫 | postfix → ReapplyIfFrozen |
+| `VRHScene.ChangeAnimator` | VR 變體 | 同上 (動態 reflection patch) |
+| `HVoiceCtrl.VoiceProc` | 女角語音 queue | prefix → return false (frozen) |
+| `HVoiceCtrl.BreathProc` | 女角呼吸聲 queue | 同上 |
+| `HMotionEyeNeckFemale.Proc` | 每 frame 寫女角眼/脖/表情 pattern | 同上 |
+| `HMotionEyeNeckMale.Proc` | 男角同上 | 同上 |
+| `HSeCtrl.Proc` | 每 frame 寫 slap / 體位接觸 SE | 同上 |
