@@ -114,12 +114,21 @@ namespace KK_ZaWarudo
         /// eyebrow/tears/neck-look-target. Without this prefix the female blinks,
         /// changes expression, and turns her head to track the camera even while
         /// animBody.speed = 0.
+        ///
+        /// Also stays held when ClimaxFaceOnResume is enabled and we're inside the
+        /// post-resume hold window — so the climax face we just injected via
+        /// ChangeEyesPtn etc. doesn't get overwritten on the next frame.
         /// </summary>
         [HarmonyPrefix]
         [HarmonyPatch(typeof(HMotionEyeNeckFemale), "Proc")]
         public static bool EyeNeckFemaleProcPre(ref bool __result)
         {
-            if (Frozen()) { __result = true; return false; }
+            var inst = TimeStopController.Instance;
+            if (inst != null && (inst.IsFrozen || inst.IsFaceHeld))
+            {
+                __result = true;
+                return false;
+            }
             return true;
         }
 

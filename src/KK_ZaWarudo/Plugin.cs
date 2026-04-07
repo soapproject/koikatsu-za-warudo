@@ -40,6 +40,11 @@ namespace KK_ZaWarudo
         internal static ConfigEntry<float> ToggleCooldown;
         internal static ConfigEntry<ResumeMode> Mode;
         internal static ConfigEntry<float> AccumulationRate;
+        internal static ConfigEntry<bool> ClimaxFaceOnResume;
+        internal static ConfigEntry<int> ClimaxEyesPtn;
+        internal static ConfigEntry<int> ClimaxMouthPtn;
+        internal static ConfigEntry<int> ClimaxEyebrowPtn;
+        internal static ConfigEntry<int> ClimaxTearsLv;
 
         // Audio
         internal static ConfigEntry<string> SfxFolder;
@@ -74,6 +79,30 @@ namespace KK_ZaWarudo
                 10f,
                 new ConfigDescription("Gauge points per second of frozen time (Accumulated mode only).",
                     new AcceptableValueRange<float>(0f, 100f)));
+
+            ClimaxFaceOnResume = Config.Bind("Climax Face", "Enable",
+                false,
+                "Force the female to make a climax face on resume. Held until the resume SFX finishes, then released to the game.");
+
+            ClimaxEyesPtn = Config.Bind("Climax Face", "Eyes Pattern",
+                4,
+                new ConfigDescription("ChaControl.ChangeEyesPtn index. KK pattern numbers vary; iterate to taste.",
+                    new AcceptableValueRange<int>(0, 20)));
+
+            ClimaxMouthPtn = Config.Bind("Climax Face", "Mouth Pattern",
+                5,
+                new ConfigDescription("ChaControl.ChangeMouthPtn index.",
+                    new AcceptableValueRange<int>(0, 20)));
+
+            ClimaxEyebrowPtn = Config.Bind("Climax Face", "Eyebrow Pattern",
+                4,
+                new ConfigDescription("ChaControl.ChangeEyebrowPtn index.",
+                    new AcceptableValueRange<int>(0, 20)));
+
+            ClimaxTearsLv = Config.Bind("Climax Face", "Tears Level",
+                3,
+                new ConfigDescription("ChaControl.tearsLv (0=none, 3=max).",
+                    new AcceptableValueRange<int>(0, 3)));
 
             SfxFolder = Config.Bind("Audio", "SFX Folder",
                 Path.Combine(Paths.PluginPath, "bgm/zawarudo"),

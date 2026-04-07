@@ -53,6 +53,12 @@ namespace KK_ZaWarudo
         private float _voiceMuteUntil;
         public bool IsVoiceSuppressed => Time.realtimeSinceStartup < _voiceMuteUntil;
 
+        // When ClimaxFaceOnResume is enabled, we inject a climax face on Resume()
+        // and pin it (block HMotionEyeNeck.Proc from overwriting) until this
+        // timestamp. Otherwise face resumes immediately as the user wants.
+        private float _faceHoldUntil;
+        public bool IsFaceHeld => Time.realtimeSinceStartup < _faceHoldUntil;
+
         // Caches — HashSet (not List) so ReapplyIfFrozen can be called repeatedly
         // (every partner switch / position change) without growing the cache unbounded
         // when the same Components are encountered again.
@@ -220,6 +226,16 @@ namespace KK_ZaWarudo
             _voiceMuteUntil = Time.realtimeSinceStartup + sfxLen;
             Plugin.LogI($"  voice mute extended until +{sfxLen:F2}s (resume SFX duration)");
 
+            // Optional: force a climax face on each female and pin it for the
+            // duration of resume SFX (otherwise HMotionEyeNeck.Proc would overwrite
+            // it on the next frame from the current animation state).
+            if (Plugin.ClimaxFaceOnResume.Value)
+            {
+                _faceHoldUntil = Time.realtimeSinceStartup + sfxLen;
+                ApplyClimaxFace();
+                Plugin.LogI($"  climax face injected, hold until +{sfxLen:F2}s");
+            }
+
             _frozen = false;
             Plugin.LogI("=== Toki wo ugokidasu === (resume complete)");
         }
@@ -304,6 +320,34 @@ namespace KK_ZaWarudo
                 }
             }
             Plugin.LogI($"  step4c subject AudioSources paused={paused} (cumulative cache={_pausedAudio.Count})");
+        }
+
+        private void ApplyClimaxFace()
+        {
+            // Only females — male protagonist face left alone.
+            if (_females == null) return;
+            int eye = Plugin.ClimaxEyesPtn.Value;
+            int mouth = Plugin.ClimaxMouthPtn.Value;
+            int eyebrow = Plugin.ClimaxEyebrowPtn.Value;
+            byte tears = (byte)Mathf.Clamp(Plugin.ClimaxTearsLv.Value, 0, 3);
+            int applied = 0;
+            foreach (var f in _females)
+            {
+                if (f == null) continue;
+                try
+                {
+                    f.ChangeEyebrowPtn(eyebrow);
+                    f.ChangeEyesPtn(eye);
+                    f.ChangeMouthPtn(mouth);
+                    f.tearsLv = tears;
+                    applied++;
+                }
+                catch (System.Exception e)
+                {
+                    Plugin.LogW($"  ApplyClimaxFace failed on {f.name}: {e.Message}");
+                }
+            }
+            Plugin.LogI($"  climax face applied to {applied} female(s) eye={eye} mouth={mouth} brow={eyebrow} tears={tears}");
         }
 
         private void StopFemaleVoices()
