@@ -73,11 +73,22 @@ namespace KK_ZaWarudo
         /// false when frozen, so no new voice / breath gets queued. Once unfrozen
         /// the patches just pass through.
         /// </summary>
+        // Voice / breath stay muted slightly longer than the freeze: until our
+        // Resume SFX (Exit + FemaleResume) finishes playing. Otherwise the game's
+        // moan would kick in the instant _frozen flips false and overlap our SFX.
+        // Face / eye / neck / SE in contrast use Frozen() and resume immediately
+        // when the freeze ends (so the character visually comes back to life).
+        private static bool VoiceMuted()
+        {
+            var inst = TimeStopController.Instance;
+            return inst != null && (inst.IsFrozen || inst.IsVoiceSuppressed);
+        }
+
         [HarmonyPrefix]
         [HarmonyPatch(typeof(HVoiceCtrl), "VoiceProc")]
         public static bool VoiceProcPre(ref bool __result)
         {
-            if (TimeStopController.Instance != null && TimeStopController.Instance.IsFrozen)
+            if (VoiceMuted())
             {
                 __result = false;
                 return false; // skip original
@@ -89,12 +100,12 @@ namespace KK_ZaWarudo
         [HarmonyPatch(typeof(HVoiceCtrl), "BreathProc")]
         public static bool BreathProcPre()
         {
-            if (TimeStopController.Instance != null && TimeStopController.Instance.IsFrozen)
+            if (VoiceMuted())
                 return false; // skip original
             return true;
         }
 
-        // Helper: shared frozen check.
+        // Helper: shared frozen check (used by face/eye/neck/SE — these resume immediately).
         private static bool Frozen() => TimeStopController.Instance != null && TimeStopController.Instance.IsFrozen;
 
         /// <summary>

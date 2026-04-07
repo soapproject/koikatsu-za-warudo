@@ -46,6 +46,13 @@ namespace KK_ZaWarudo
         private float _freezeStartTime;
         private float _lastToggleTime; // for hotkey debounce
 
+        // Game voice/breath/SE stays muted until this timestamp (Time.realtimeSinceStartup).
+        // Set to "now + ResumeSfx length" on Resume() so the game's moan doesn't kick
+        // in while our Exit + FemaleResume SFX is still playing.
+        // Voice prefix patches in Hooks.cs check IsFrozen || IsVoiceSuppressed.
+        private float _voiceMuteUntil;
+        public bool IsVoiceSuppressed => Time.realtimeSinceStartup < _voiceMuteUntil;
+
         // Caches — HashSet (not List) so ReapplyIfFrozen can be called repeatedly
         // (every partner switch / position change) without growing the cache unbounded
         // when the same Components are encountered again.
@@ -199,8 +206,19 @@ namespace KK_ZaWarudo
             InjectGauge();
 
             // SFX — interrupts During loop, then Exit, then FemaleResume
-            try { AudioManager.Instance.PlayResumeSequence(); }
+            float sfxLen = 0f;
+            try
+            {
+                sfxLen = AudioManager.Instance.ResumeSequenceLength;
+                AudioManager.Instance.PlayResumeSequence();
+            }
             catch (System.Exception e) { Plugin.LogW($"Resume SFX sequence failed: {e}"); }
+
+            // Keep game voice muted until our resume SFX finishes — otherwise the
+            // game's moan kicks in the instant _frozen flips false and overlaps
+            // our Exit + FemaleResume clips.
+            _voiceMuteUntil = Time.realtimeSinceStartup + sfxLen;
+            Plugin.LogI($"  voice mute extended until +{sfxLen:F2}s (resume SFX duration)");
 
             _frozen = false;
             Plugin.LogI("=== Toki wo ugokidasu === (resume complete)");

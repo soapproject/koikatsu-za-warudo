@@ -29,6 +29,24 @@ namespace KK_ZaWarudo
         private AudioClip _exit;
         private AudioClip _femaleResume;
 
+        /// <summary>
+        /// Sum of Exit + FemaleResume clip lengths in seconds.
+        /// Used by TimeStopController to keep game voice muted until our resume
+        /// sequence finishes (so the game's moan doesn't kick in while our SFX
+        /// is still playing). Returns 0 if either clip is missing — caller falls
+        /// through to immediate unmute.
+        /// </summary>
+        public float ResumeSequenceLength
+        {
+            get
+            {
+                float total = 0f;
+                if (_exit != null) total += _exit.length;
+                if (_femaleResume != null) total += _femaleResume.length;
+                return total;
+            }
+        }
+
         private bool _loaded;
         private bool _loading;
 
