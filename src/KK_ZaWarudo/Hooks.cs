@@ -133,6 +133,20 @@ namespace KK_ZaWarudo
         }
 
         /// <summary>
+        /// Head turn driver. NeckLookControllerVer2 is a separate MonoBehaviour
+        /// that runs LateUpdate every frame and rewrites bone rotations directly,
+        /// independent of HMotionEyeNeck.Proc. We have to skip this too or the
+        /// female keeps tracking the camera with her head while frozen (F1).
+        /// </summary>
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(NeckLookControllerVer2), "LateUpdate")]
+        public static bool NeckLookLateUpdatePre()
+        {
+            if (Frozen()) return false;
+            return true;
+        }
+
+        /// <summary>
         /// Same for the male slot when it's a non-protagonist (male1 in darkness).
         /// We don't have a clean way here to tell which HMotionEyeNeckMale instance
         /// belongs to the protagonist vs male1 — so we conservatively freeze ALL

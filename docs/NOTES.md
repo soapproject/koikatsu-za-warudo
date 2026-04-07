@@ -103,13 +103,16 @@ Pitfalls hit during development, risks found in audits, and unresolved follow-up
 
 ---
 
-## User feedback (v0.1 playtest, unresolved)
+## User feedback (v0.1 playtest)
 
-Recorded verbatim from a tester. Each item still needs investigation/repro before fix — none of this is yet diagnosed or attempted.
+Recorded from a tester. Status updated as items get addressed.
 
-- **F1 — Head tracking + blinking still active during freeze.** Our `HMotionEyeNeckFemale.Proc` prefix-skip evidently isn't the only driver. Possibilities to investigate: blink driven from a separate `EyeLookController` / `EyeLookCalc` (these classes exist per ilspy, lines ~182705/183105), head turn driven from `NeckLookControllerVer2` directly, or animator events on `animBody` that we should be blocking despite `speed=0`. Need to grep callers of `chara.ChangeEyesOpenMax` etc. and identify the per-frame source.
+- **F1 — Head tracking + blinking still active during freeze.** ✅ **Patched.** Two separate drivers needed handling:
+  1. `NeckLookControllerVer2.LateUpdate` runs every frame and writes head/neck rotations directly (independent of `HMotionEyeNeck.Proc`). Now prefix-skipped while frozen.
+  2. Blinking is driven by `fbsCtrl.BlinkCtrl`. Calling `ChangeEyesBlinkFlag(false)` on each subject (cached + restored on resume) stops the auto-blink.
+  Side effect: `NeckLookControllerVer2` skip is type-level so the male protagonist's head also stops tracking — verify in playtest, may need per-instance gating.
 
-- **F2 — Woman moans + a "crumpling/boiling noise" play during freeze with zero input.** Our `HVoiceCtrl.VoiceProc/BreathProc` prefixes return false but something else is queueing voice. Possible culprits: `Manager.Voice` has another tick path, or audio is coming from `HSeCtrl` that we thought was skipped. The "crumpling/boiling" noise sounds like fluid/SE — could be `HParticleCtrl` SE or a separate ambient loop we never silenced.
+- **F2 — Woman moans + a "crumpling/boiling noise" play during freeze with zero input.** ✅ **Patched (nuclear).** Instead of hunting every audio source individually, set `AudioListener.pause = true` on freeze for a global mute. Our plugin AudioSource has `ignoreListenerPause = true` so SFX still plays. **Trade-off**: BGM is now also muted during freeze. The original spec said BGM should keep playing for immersion, but the user explicitly said "there should be no noises whatsoever besides any sounds the player makes" — accepting BGM mute as the new behavior. SPEC.md updated to reflect this.
 
 - **F3 — On resume, woman screams once but mouth doesn't move and no subtitles appear; only one voice line variant.** Two real issues here:
   1. Our resume audio plays through *our* AudioSource, decoupled from the game's lip-sync / subtitle pipeline, so mouth and text don't follow.
@@ -124,13 +127,21 @@ Recorded verbatim from a tester. Each item still needs investigation/repro befor
 
 - **F7 — Hair / skirt physics turn off when time freezes.** This is currently *intended*: our `FreezeFemaleBones` disables `DynamicBone` and `DynamicBone_Ver02`. User finds it ugly — they want hair/cloth to keep draping naturally during freeze (gravity-settled), not be locked mid-motion. Options to consider: don't disable DynamicBone at all (let physics keep simulating with the body frozen — bones will drape), or only disable for a moment then re-enable.
 
-- **F8 — Freezing time reverts an in-progress ahegao expression.** The female loses her current ahegao face the moment we freeze. Our `HMotionEyeNeck.Proc` skip prevents new expression updates, but something is *replacing* the current face on the freeze frame — possibly because we restore animator speed=0 mid-state and the next layer state evaluation hits a default, or `HFlag.speedCalc=0` resets a tied state. Capture the current `eyesPtn`/`mouthPtn`/`eyebrowPtn` on freeze and re-apply on the same frame after the prefixes engage.
+- **F8 — Freezing time reverts an in-progress ahegao expression.** ✅ **Patched.** Snapshot `eyesPtn` / `mouthPtn` / `eyebrowPtn` / `tearsLv` / `eyesOpenMax` per subject on freeze. Re-applied on every `ReapplyIfFrozen` (covers partner switches and any race where the game wrote a default face before our prefix kicked in). Snapshot is dropped on resume so the game takes over normally.
 
 - **F9 — Fluid particles don't fall during freeze, until the female reaches a certain animation timestamp.** Our `ParticleSystem.Pause(true)` halts simulation entirely, so existing fluid blobs hang in mid-air. User wants gravity to keep working on existing particles (only stop emission of new ones). Switch from `Pause()` to setting the emission module enabled=false (cache + restore) so existing particles continue to simulate to ground.
 
-- **F10 — Free H: cannot select HSprite UI buttons (speed up/down, auto, position change) while frozen.** Possibly the same root as F4 — UI is gated. **User wants to be able to control free H actions during freeze.** Might need to NOT freeze whatever the HSprite click handler depends on, or whitelist specific actions to bypass our prefixes.
+- **F10 — Free H: cannot select HSprite UI buttons (speed up/down, auto, position change) while frozen.** ⏸ **Deferred — needs design rethink.** Investigation found the root cause: KK's HSonyu/HHoushi/HAibu state machines (`HSceneProc.LoopProc` callees) gate every action transition behind `flags.voiceWait` clearing, which only happens when (a) the animator state name reaches `Idle` / `Stop_Idle` AND (b) `IsCheckVoicePlay` returns true. We block both: `animBody.speed = 0` keeps the animator stuck mid-state, and our `HVoiceCtrl.VoiceProc` prefix prevents voice playback from completing. So the wait condition never resolves and any click intent (`flags.click = X`) sits in the queue forever.
 
-  Sub-issue: user reports `Accumulation Rate` config "seems to affect non-frozen time as well". This shouldn't be happening — `InjectGauge()` is only called in `Resume()`. Could be perception (post-resume gauge bump appears continuous if you resume mid-progression), but verify: log gauge values across a full freeze→resume cycle and confirm the only change is the one explicit injection.
+  **Possible solutions**, none clean:
+  1. Don't freeze the animator at all — defeats the visual point of time stop.
+  2. Use a different mechanism to visually freeze (e.g. cache + reapply bone positions every LateUpdate). Expensive and fragile.
+  3. Hotkey to "tap unfreeze" for one frame, accept the click, refreeze. Hacky UX.
+  4. Intercept HSprite click handlers at our layer and stash them as pending actions, replayed on real Resume.
+
+  Need to discuss with user before implementing. **For now this is a known limitation: in free H the player should unfreeze to interact with the UI, then refreeze.**
+
+  Sub-issue: user reports `Accumulation Rate` config "seems to affect non-frozen time as well". This shouldn't be happening — `InjectGauge()` is only called in `Resume()`. Could be perception (post-resume gauge bump appears continuous if you resume mid-progression), but verify with a full-cycle gauge log dump.
 
 ---
 

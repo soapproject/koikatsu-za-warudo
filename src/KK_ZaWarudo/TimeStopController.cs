@@ -66,7 +66,13 @@ namespace KK_ZaWarudo
         private readonly HashSet<Behaviour> _disabledBones = new HashSet<Behaviour>();
         private readonly HashSet<ParticleSystem> _pausedParticles = new HashSet<ParticleSystem>();
         private readonly HashSet<AudioSource> _pausedAudio = new HashSet<AudioSource>();
+        private readonly Dictionary<ChaControl, bool> _savedBlinkFlags = new Dictionary<ChaControl, bool>();
+        // F8: capture in-progress face per character on freeze and re-apply every
+        // ReapplyIfFrozen call so an in-progress ahegao isn't reverted to default.
+        private struct FaceState { public int eyes; public int mouth; public int eyebrow; public byte tears; public float eyesOpen; }
+        private readonly Dictionary<ChaControl, FaceState> _savedFaces = new Dictionary<ChaControl, FaceState>();
         private float _savedSpeedCalc;
+        private bool _savedAudioListenerPause;
 
         public static void Bind(MonoBehaviour proc, List<ChaControl> females, ChaControl male, List<ChaControl> extraMales, HFlag flags)
         {
@@ -158,6 +164,23 @@ namespace KK_ZaWarudo
             //     where transVoiceMouth only includes the active partner).
             FreezeFemaleAudio();
 
+            // 4d. F2 nuclear: AudioListener.pause = true silences EVERYTHING globally
+            //     (BGM, ambient SE, body sounds, fluid sounds, anything we missed).
+            //     Our plugin AudioSource has ignoreListenerPause=true so SFX still
+            //     plays. Side effect: BGM is also muted during freeze (intentional
+            //     trade-off for "ZA WARUDO: silence" feel).
+            _savedAudioListenerPause = AudioListener.pause;
+            AudioListener.pause = true;
+            Plugin.LogI($"  step4d AudioListener.pause: {_savedAudioListenerPause} -> true (global mute)");
+
+            // 4e. F1: stop auto-blink on each subject.
+            DisableBlink();
+            Plugin.LogI($"  step4e blink disabled on {_savedBlinkFlags.Count} subject(s)");
+
+            // 4f. F8: snapshot in-progress face so an ahegao isn't lost.
+            SnapshotAndPinFace();
+            Plugin.LogI($"  step4f face snapshot for {_savedFaces.Count} subject(s)");
+
             // 5. SFX — Enter then During (loop)
             try { AudioManager.Instance.PlayFreezeSequence(); }
             catch (System.Exception e) { Plugin.LogW($"Freeze SFX sequence failed: {e}"); }
@@ -202,6 +225,26 @@ namespace KK_ZaWarudo
             }
             _pausedAudio.Clear();
             Plugin.LogI($"  unpaused audio sources={restoredAudio}");
+
+            // Restore global AudioListener.pause (F2 nuclear)
+            AudioListener.pause = _savedAudioListenerPause;
+            Plugin.LogI($"  AudioListener.pause restored to {_savedAudioListenerPause}");
+
+            // Restore blink flags (F1)
+            int restoredBlink = 0;
+            foreach (var kv in _savedBlinkFlags)
+            {
+                if (kv.Key != null)
+                {
+                    try { kv.Key.ChangeEyesBlinkFlag(kv.Value); restoredBlink++; } catch { }
+                }
+            }
+            _savedBlinkFlags.Clear();
+            Plugin.LogI($"  blink restored on {restoredBlink} subject(s)");
+
+            // Don't restore _savedFaces — let the game take over the face on resume.
+            // (If ClimaxFaceOnResume is enabled, ApplyClimaxFace below overrides anyway.)
+            _savedFaces.Clear();
 
             if (_flags != null)
             {
@@ -255,6 +298,8 @@ namespace KK_ZaWarudo
             FreezeParticles();
             StopFemaleVoices();    // re-stop voice slots — new partner may have new mouth bindings
             FreezeFemaleAudio();   // catches any AudioSource that started playing during the switch
+            DisableBlink();        // F1: cover newly-bound subjects
+            SnapshotAndPinFace();  // F8: re-pin in case the switch reset the face
             if (_flags != null) _flags.speedCalc = 0f;
         }
 
@@ -320,6 +365,71 @@ namespace KK_ZaWarudo
                 }
             }
             Plugin.LogI($"  step4c subject AudioSources paused={paused} (cumulative cache={_pausedAudio.Count})");
+        }
+
+        /// <summary>
+        /// F1: stop blinking. ChangeEyesBlinkFlag(false) tells fbsCtrl.BlinkCtrl
+        /// to fix the blink state, so eyes don't auto-close periodically. Cache
+        /// the previous flag and restore it on resume.
+        /// </summary>
+        private void DisableBlink()
+        {
+            foreach (var c in FrozenSubjects())
+            {
+                if (_savedBlinkFlags.ContainsKey(c)) continue;
+                try
+                {
+                    _savedBlinkFlags[c] = c.GetEyesBlinkFlag();
+                    c.ChangeEyesBlinkFlag(false);
+                }
+                catch (System.Exception e)
+                {
+                    Plugin.LogW($"  DisableBlink failed on {c.name}: {e.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// F8: snapshot the current face per subject so an in-progress ahegao
+        /// isn't lost when our HMotionEyeNeck.Proc skip kicks in. Re-applied on
+        /// every Reapply call so partner switches preserve it too.
+        /// </summary>
+        private void SnapshotAndPinFace()
+        {
+            foreach (var c in FrozenSubjects())
+            {
+                if (_savedFaces.ContainsKey(c))
+                {
+                    // Re-apply (covers ReapplyIfFrozen and any frame where the
+                    // game wrote a default face before our prefix kicked in).
+                    var s = _savedFaces[c];
+                    try
+                    {
+                        c.ChangeEyebrowPtn(s.eyebrow);
+                        c.ChangeEyesPtn(s.eyes);
+                        c.ChangeMouthPtn(s.mouth);
+                        c.tearsLv = s.tears;
+                        c.ChangeEyesOpenMax(s.eyesOpen);
+                    }
+                    catch { }
+                    continue;
+                }
+                try
+                {
+                    _savedFaces[c] = new FaceState
+                    {
+                        eyes = c.fileStatus.eyesPtn,
+                        mouth = c.fileStatus.mouthPtn,
+                        eyebrow = c.fileStatus.eyebrowPtn,
+                        tears = c.tearsLv,
+                        eyesOpen = c.fileStatus.eyesOpenMax,
+                    };
+                }
+                catch (System.Exception e)
+                {
+                    Plugin.LogW($"  SnapshotFace failed on {c.name}: {e.Message}");
+                }
+            }
         }
 
         private void ApplyClimaxFace()

@@ -14,7 +14,7 @@ Trigger a "time stop" inside Koikatsu H-scenes: freeze every other character's a
 - **Active scope**: Only inside H-scenes (`HSceneProc` or `VRHScene` exists). No effect in Studio / Maker / Main game.
 - **Protagonist definition**: `HSceneProc.male`. Even in female-protagonist positions this is treated as "the player camera owner" and is **never frozen**.
 - **Time axis**: Do NOT touch `Time.timeScale` (would break camera/UI). Only mutate per-Animator speed, prefix-skip KK subsystems, and pause physics.
-- **BGM**: Untouched. Time stop only affects character animation, physics, gauge system, and human voice/SE.
+- **BGM**: Muted along with everything else during freeze (via `AudioListener.pause = true`). Per-AudioSource silencing missed too many sources (F2 feedback), so the global mute is the simpler correct answer. Plugin SFX uses `AudioSource.ignoreListenerPause = true` to bypass the global pause.
 - **Player freedom while frozen**: Position changes, UI interaction, and **swapping the active female partner** (3P/4P) are all allowed.
 - **Gauge injection target**: `HFlag.gaugeFemale` (the pleasure amount, not a sensitivity multiplier).
 - **Never trigger finish ourselves**: After Instant mode pegs the gauge to 100, whether the game enters orgasm is left to the game / other plugins.

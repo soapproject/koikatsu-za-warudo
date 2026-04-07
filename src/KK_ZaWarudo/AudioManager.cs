@@ -58,7 +58,11 @@ namespace KK_ZaWarudo
             _source.playOnAwake = false;
             _source.loop = false;
             _source.spatialBlend = 0f;
-            Plugin.LogI("AudioSource attached to plugin GameObject.");
+            // F2: TimeStopController flips AudioListener.pause = true on freeze to
+            // mute the entire game (including stubborn voice/SE sources we never
+            // located). Our own SFX must opt out of that global pause.
+            _source.ignoreListenerPause = true;
+            Plugin.LogI("AudioSource attached to plugin GameObject (ignoreListenerPause=true).");
         }
 
         /// <summary>Kick off async load. Idempotent. Call from Plugin.Awake.</summary>
