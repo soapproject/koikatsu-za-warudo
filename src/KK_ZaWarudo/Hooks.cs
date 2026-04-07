@@ -60,5 +60,38 @@ namespace KK_ZaWarudo
                 TimeStopController.Instance.ReapplyIfFrozen();
             }
         }
+
+        /// <summary>
+        /// Mute the female voice queue while frozen. KK voice does NOT play through
+        /// AudioSources under the ChaControl hierarchy — it goes through pooled
+        /// AudioSources owned by Manager.Voice, scheduled by HVoiceCtrl coroutines
+        /// that run independently of animator state. So freezing animBody.speed
+        /// alone leaves the queue ticking.
+        ///
+        /// Following the KK_HSceneOptions ForceStopVoice/MuteAll pattern (Hooks.cs:120):
+        /// short-circuit VoiceProc and BreathProc with prefix patches that return
+        /// false when frozen, so no new voice / breath gets queued. Once unfrozen
+        /// the patches just pass through.
+        /// </summary>
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(HVoiceCtrl), "VoiceProc")]
+        public static bool VoiceProcPre(ref bool __result)
+        {
+            if (TimeStopController.Instance != null && TimeStopController.Instance.IsFrozen)
+            {
+                __result = false;
+                return false; // skip original
+            }
+            return true;
+        }
+
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(HVoiceCtrl), "BreathProc")]
+        public static bool BreathProcPre()
+        {
+            if (TimeStopController.Instance != null && TimeStopController.Instance.IsFrozen)
+                return false; // skip original
+            return true;
+        }
     }
 }
