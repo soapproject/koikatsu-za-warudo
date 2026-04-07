@@ -93,5 +93,55 @@ namespace KK_ZaWarudo
                 return false; // skip original
             return true;
         }
+
+        // Helper: shared frozen check.
+        private static bool Frozen() => TimeStopController.Instance != null && TimeStopController.Instance.IsFrozen;
+
+        /// <summary>
+        /// Freeze female face/expression/eye/neck. HMotionEyeNeckFemale.Proc is called
+        /// every frame from HSceneProc and reads animator state to drive eyes/mouth/
+        /// eyebrow/tears/neck-look-target. Without this prefix the female blinks,
+        /// changes expression, and turns her head to track the camera even while
+        /// animBody.speed = 0.
+        /// </summary>
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(HMotionEyeNeckFemale), "Proc")]
+        public static bool EyeNeckFemaleProcPre(ref bool __result)
+        {
+            if (Frozen()) { __result = true; return false; }
+            return true;
+        }
+
+        /// <summary>
+        /// Same for the male slot when it's a non-protagonist (male1 in darkness).
+        /// We don't have a clean way here to tell which HMotionEyeNeckMale instance
+        /// belongs to the protagonist vs male1 — so we conservatively freeze ALL
+        /// male eye/neck Proc during freeze. The protagonist still controls his own
+        /// camera/posture via player input; this only stops the auto eye-neck
+        /// tracking, which is fine for "ZA WARUDO" feel.
+        ///
+        /// If we later observe the player feels too "frozen", revisit and route
+        /// only male1 through the skip.
+        /// </summary>
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(HMotionEyeNeckMale), "Proc")]
+        public static bool EyeNeckMaleProcPre(ref bool __result)
+        {
+            if (Frozen()) { __result = true; return false; }
+            return true;
+        }
+
+        /// <summary>
+        /// Freeze HSceneProc-driven sound effects: HSeCtrl.Proc plays slap / body
+        /// contact SE every frame based on animator state. Without this we'd hear
+        /// random slap sounds during the time stop loop.
+        /// </summary>
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(HSeCtrl), "Proc")]
+        public static bool SeCtrlProcPre(ref bool __result)
+        {
+            if (Frozen()) { __result = true; return false; }
+            return true;
+        }
     }
 }
