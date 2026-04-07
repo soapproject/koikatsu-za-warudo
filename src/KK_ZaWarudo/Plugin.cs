@@ -37,6 +37,7 @@ namespace KK_ZaWarudo
 
         // General
         internal static ConfigEntry<KeyboardShortcut> ToggleKey;
+        internal static ConfigEntry<float> ToggleCooldown;
         internal static ConfigEntry<ResumeMode> Mode;
         internal static ConfigEntry<float> AccumulationRate;
 
@@ -59,6 +60,11 @@ namespace KK_ZaWarudo
             ToggleKey = Config.Bind("General", "Toggle Key",
                 new KeyboardShortcut(KeyCode.T),
                 "Press during HScene to freeze/unfreeze.");
+
+            ToggleCooldown = Config.Bind("General", "Toggle Cooldown",
+                0.3f,
+                new ConfigDescription("Minimum seconds between freeze/unfreeze toggles. Prevents SFX chopping and gauge spam from rapid presses.",
+                    new AcceptableValueRange<float>(0f, 5f)));
 
             Mode = Config.Bind("General", "Resume Mode",
                 ResumeMode.Accumulated,

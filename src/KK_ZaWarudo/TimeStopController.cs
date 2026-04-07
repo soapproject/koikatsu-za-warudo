@@ -44,6 +44,7 @@ namespace KK_ZaWarudo
         private bool _frozen;
         public bool IsFrozen => _frozen;
         private float _freezeStartTime;
+        private float _lastToggleTime; // for hotkey debounce
 
         // Caches — HashSet (not List) so ReapplyIfFrozen can be called repeatedly
         // (every partner switch / position change) without growing the cache unbounded
@@ -90,6 +91,17 @@ namespace KK_ZaWarudo
                 Plugin.LogI("Toggle ignored: not in HScene.");
                 return;
             }
+            // Debounce rapid presses to avoid SFX chopping, gauge spam, and
+            // pointless cache churn (every Freeze() iterates GetComponentsInChildren).
+            var now = Time.realtimeSinceStartup;
+            var sinceLast = now - _lastToggleTime;
+            if (sinceLast < Plugin.ToggleCooldown.Value)
+            {
+                Plugin.LogI($"Toggle debounced: {sinceLast:F2}s since last (cooldown={Plugin.ToggleCooldown.Value:F2}s)");
+                return;
+            }
+            _lastToggleTime = now;
+
             if (_frozen) Resume();
             else Freeze();
         }
