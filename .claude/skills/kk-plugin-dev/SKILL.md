@@ -145,6 +145,29 @@ These are separate `MonoBehaviour`s or methods that each independently push stat
 | `HSceneProc.ChangeAnimator` | Position / animation switch | postfix → re-pin freeze on the new active set |
 | `VRHScene.ChangeAnimator` | VR variant | same, manually patched via reflection if VRHScene type exists |
 
+### KK in-game settings (`Manager.Config.EtcData`)
+
+KK exposes some in-game user-facing toggles via the static `Manager.Config.EtcData` object. These are read by the game's per-frame code so flipping them takes effect on the next frame. Useful when you want a "user-facing setting" effect from a plugin without writing your own gating.
+
+```csharp
+public bool FemaleEyesCamera;     // line ~85648 — "Female 0 eyes track the camera"
+public bool FemaleNeckCamera;     // line ~85650 — "Female 0 neck tracks the camera"
+public bool FemaleEyesCamera1;    // line ~85652 — same for female slot 1 (3P/darkness)
+public bool FemaleNeckCamera1;    // line ~85654
+
+public bool VisibleSon, VisibleBody;
+public bool ForegroundEyes, ForegroundEyebrow;
+public bool hohoAka;              // blush (used by ChaControl line ~67231)
+public bool loadAllAccessory, loadHeadAccessory;
+public int  rampId;
+public float shadowDepth, lineDepth, lineWidth;
+public bool HInitCamera;
+```
+
+The `Female*Camera*` flags gate `SetEyeNeckPtn(1000/1001)` inside `HMotionEyeNeckFemale.Proc` (the camera-tracking branch — see line ~139324). Setting them false stops the female from actively looking at the player camera even when the rest of `Proc` runs. Used in our freeze step 4e3 to belt-and-braces the tracking prevention.
+
+**Note**: there's no `MaleEyesCamera` / `MaleNeckCamera` equivalent — `HMotionEyeNeckMale.Proc` doesn't take config bool args. Male tracking has to be handled via the prefix-skip approach.
+
 ### Voice / audio APIs
 
 ```csharp

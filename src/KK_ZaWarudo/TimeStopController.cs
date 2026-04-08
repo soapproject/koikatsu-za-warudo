@@ -216,6 +216,16 @@ namespace KK_ZaWarudo
         private struct FaceState { public int eyes; public int mouth; public int eyebrow; public byte tears; public float eyesOpen; }
         private readonly Dictionary<ChaControl, FaceState> _savedFaces = new Dictionary<ChaControl, FaceState>();
         private bool _savedAudioListenerPause;
+        // KK in-game "Female eyes/neck track camera" toggles. Cached + restored
+        // around freeze. These are the same flags KK exposes in its config UI;
+        // forcing them false during freeze prevents the female from camera-tracking
+        // even via the natural state-driven path inside HMotionEyeNeckFemale.Proc
+        // (`SetEyeNeckPtn(1000/1001)` are gated on these bools — see line 139324).
+        // This is belt-and-braces alongside our prefix patches; turning them off
+        // also stops any other reader of these flags from initiating tracking.
+        private bool _savedEtcFemaleEyes0, _savedEtcFemaleNeck0;
+        private bool _savedEtcFemaleEyes1, _savedEtcFemaleNeck1;
+        private bool _savedEtcCached;
         // Belt-and-braces gauge lock (paired with HFlag.FemaleGaugeUp/MaleGaugeUp prefix).
         // FemaleGaugeUp early-returns if lockGugeFemale is true (and the caller isn't
         // forcing). InjectGauge writes gaugeFemale directly so it bypasses this lock.
@@ -353,6 +363,30 @@ namespace KK_ZaWarudo
             FreezeNeckLook();
             Plugin.LogI($"  step4e2 neck-look frozen on {_savedSkipCalc.Count} subject(s) headPins={_pinnedHeadRots.Count}");
 
+            // 4e3. KK in-game tracking toggles — cache + force false. The game
+            // exposes these as user-facing settings ("Female eyes track camera",
+            // "Female neck track camera"). Setting them false halts the camera-
+            // tracking branch inside HMotionEyeNeckFemale.Proc even when the prefix
+            // is bypassed. Restored on resume so the user's normal preference comes back.
+            try
+            {
+                if (Manager.Config.EtcData != null)
+                {
+                    _savedEtcFemaleEyes0 = Manager.Config.EtcData.FemaleEyesCamera;
+                    _savedEtcFemaleNeck0 = Manager.Config.EtcData.FemaleNeckCamera;
+                    _savedEtcFemaleEyes1 = Manager.Config.EtcData.FemaleEyesCamera1;
+                    _savedEtcFemaleNeck1 = Manager.Config.EtcData.FemaleNeckCamera1;
+                    _savedEtcCached = true;
+                    Manager.Config.EtcData.FemaleEyesCamera = false;
+                    Manager.Config.EtcData.FemaleNeckCamera = false;
+                    Manager.Config.EtcData.FemaleEyesCamera1 = false;
+                    Manager.Config.EtcData.FemaleNeckCamera1 = false;
+                    Plugin.LogI($"  step4e3 EtcData camera-track toggles: eyes0/neck0/eyes1/neck1 was ({_savedEtcFemaleEyes0},{_savedEtcFemaleNeck0},{_savedEtcFemaleEyes1},{_savedEtcFemaleNeck1}) -> all false");
+                }
+                else { Plugin.LogW("  step4e3 Manager.Config.EtcData null, skipped"); }
+            }
+            catch (System.Exception e) { Plugin.LogW($"  step4e3 EtcData toggle failed: {e.Message}"); }
+
             // 4f. F8: snapshot in-progress face so an ahegao isn't lost.
             SnapshotAndPinFace();
             Plugin.LogI($"  step4f face snapshot for {_savedFaces.Count} subject(s)");
@@ -429,6 +463,24 @@ namespace KK_ZaWarudo
 
             // Restore neck-look skipCalc (Issue 1+5)
             RestoreNeckLook();
+
+            // Restore EtcData camera-track toggles (step 4e3)
+            if (_savedEtcCached)
+            {
+                try
+                {
+                    if (Manager.Config.EtcData != null)
+                    {
+                        Manager.Config.EtcData.FemaleEyesCamera = _savedEtcFemaleEyes0;
+                        Manager.Config.EtcData.FemaleNeckCamera = _savedEtcFemaleNeck0;
+                        Manager.Config.EtcData.FemaleEyesCamera1 = _savedEtcFemaleEyes1;
+                        Manager.Config.EtcData.FemaleNeckCamera1 = _savedEtcFemaleNeck1;
+                        Plugin.LogI($"  EtcData camera-track restored: ({_savedEtcFemaleEyes0},{_savedEtcFemaleNeck0},{_savedEtcFemaleEyes1},{_savedEtcFemaleNeck1})");
+                    }
+                }
+                catch (System.Exception e) { Plugin.LogW($"  EtcData restore failed: {e.Message}"); }
+                _savedEtcCached = false;
+            }
 
             // Don't restore _savedFaces — let the game take over the face on resume.
             // (If ClimaxFaceOnResume is enabled, ApplyClimaxFace below overrides anyway.)
