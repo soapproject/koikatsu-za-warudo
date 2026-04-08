@@ -43,6 +43,7 @@ namespace KK_ZaWarudo
 
         private bool _frozen;
         public bool IsFrozen => _frozen;
+        public HFlag Flags => _flags;
         private float _freezeStartTime;
         private float _lastToggleTime; // for hotkey debounce
 
@@ -64,7 +65,10 @@ namespace KK_ZaWarudo
         // when the same Components are encountered again.
         private readonly Dictionary<Animator, float> _animSpeeds = new Dictionary<Animator, float>();
         private readonly HashSet<Behaviour> _disabledBones = new HashSet<Behaviour>();
-        private readonly HashSet<ParticleSystem> _pausedParticles = new HashSet<ParticleSystem>();
+        // F9: instead of HashSet<ParticleSystem> + Pause(true), we now toggle the
+        // EmissionModule.enabled per system so existing particles keep simulating
+        // (gravity still pulls fluid blobs to the ground) but no new particles spawn.
+        private readonly Dictionary<ParticleSystem, bool> _suppressedEmission = new Dictionary<ParticleSystem, bool>();
         private readonly HashSet<AudioSource> _pausedAudio = new HashSet<AudioSource>();
         private readonly Dictionary<ChaControl, bool> _savedBlinkFlags = new Dictionary<ChaControl, bool>();
         // F8: capture in-progress face per character on freeze and re-apply every
@@ -153,9 +157,9 @@ namespace KK_ZaWarudo
             FreezeFemaleBones();
             Plugin.LogI($"  step3 bones disabled={_disabledBones.Count}");
 
-            // 4. ParticleSystems under HScene root
+            // 4. ParticleSystems under HScene root — emission only, existing particles keep falling
             FreezeParticles();
-            Plugin.LogI($"  step4 particles paused={_pausedParticles.Count}");
+            Plugin.LogI($"  step4 particle emission suppressed={_suppressedEmission.Count}");
 
             // 4b. Stop in-flight female voice (KK_HSceneOptions ForceStopVoice pattern)
             StopFemaleVoices();
@@ -210,13 +214,22 @@ namespace KK_ZaWarudo
             _disabledBones.Clear();
             Plugin.LogI($"  re-enabled bones={restoredBones}");
 
-            int restoredParticles = 0;
-            foreach (var p in _pausedParticles)
+            int restoredEmission = 0;
+            foreach (var kv in _suppressedEmission)
             {
-                if (p != null) { p.Play(true); restoredParticles++; }
+                if (kv.Key != null)
+                {
+                    try
+                    {
+                        var em = kv.Key.emission;
+                        em.enabled = kv.Value;
+                        restoredEmission++;
+                    }
+                    catch { }
+                }
             }
-            _pausedParticles.Clear();
-            Plugin.LogI($"  resumed particles={restoredParticles}");
+            _suppressedEmission.Clear();
+            Plugin.LogI($"  particle emission restored={restoredEmission}");
 
             int restoredAudio = 0;
             foreach (var a in _pausedAudio)
@@ -336,21 +349,17 @@ namespace KK_ZaWarudo
             a.speed = 0f;
         }
 
+        // F7: previously this disabled every DynamicBone / DynamicBone_Ver02 on
+        // each subject. Playtest feedback: "hair and skirt physics turn off when
+        // time freezes" — user wants hair/cloth to keep draping naturally during
+        // freeze (gravity still works on bones), only the body anchor is locked
+        // (animBody.speed = 0). Now a no-op so the physics solvers keep running
+        // and hair settles into a static drape over time.
+        // _disabledBones cache stays defined (and will simply be empty) so the
+        // restore loop in Resume() is harmless.
         private void FreezeFemaleBones()
         {
-            foreach (var c in FrozenSubjects())
-            {
-                foreach (var b in c.GetComponentsInChildren<DynamicBone>(true))
-                {
-                    if (b == null || !b.enabled) continue;
-                    if (_disabledBones.Add(b)) b.enabled = false;
-                }
-                foreach (var b in c.GetComponentsInChildren<DynamicBone_Ver02>(true))
-                {
-                    if (b == null || !b.enabled) continue;
-                    if (_disabledBones.Add(b)) b.enabled = false;
-                }
-            }
+            // intentional no-op — see comment above.
         }
 
         private void FreezeFemaleAudio()
@@ -489,8 +498,15 @@ namespace KK_ZaWarudo
             if (_proc == null) return;
             foreach (var ps in _proc.GetComponentsInChildren<ParticleSystem>(true))
             {
-                if (ps == null || !ps.isPlaying) continue;
-                if (_pausedParticles.Add(ps)) ps.Pause(true);
+                if (ps == null) continue;
+                if (_suppressedEmission.ContainsKey(ps)) continue;
+                try
+                {
+                    var em = ps.emission;
+                    _suppressedEmission[ps] = em.enabled;
+                    em.enabled = false; // stop new spawns; existing particles still simulate
+                }
+                catch { }
             }
         }
 

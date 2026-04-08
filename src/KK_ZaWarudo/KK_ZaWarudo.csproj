@@ -9,7 +9,7 @@
     <RootNamespace>KK_ZaWarudo</RootNamespace>
     <Version>0.1.0</Version>
     <LangVersion>latest</LangVersion>
-    <NoWarn>CS0626;CS0649</NoWarn>
+    <NoWarn>CS0626;CS0649;CS0162</NoWarn>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <Description>JoJo "ZA WARUDO" time-stop for Koikatsu H-scenes</Description>
   </PropertyGroup>

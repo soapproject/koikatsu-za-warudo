@@ -53,6 +53,7 @@ namespace KK_ZaWarudo
         internal static ConfigEntry<string> ExitSfxFile;        // 3. 時停結束
         internal static ConfigEntry<string> FemaleResumeSfxFile;// 4. 結束時女角
         internal static ConfigEntry<float> SfxVolume;
+        internal static ConfigEntry<bool> PlayDuringLoop;
 
         internal static Plugin Instance;
         private Harmony _harmony;
@@ -133,6 +134,10 @@ namespace KK_ZaWarudo
                 new ConfigDescription("Relative volume; multiplied by game master volume.",
                     new AcceptableValueRange<float>(0f, 1f)));
 
+            PlayDuringLoop = Config.Bind("Audio", "Play During Loop",
+                true,
+                "Play the female 'during' voice loop while frozen. Disable for true silence after Enter SFX (the loop is what playtesters sometimes mistake for leaked game audio).");
+
             // KKAPI manages the HScene start/end lifecycle for us (incl. VR).
             // See ZaWarudoController.OnStartH/OnEndH.
             GameAPI.RegisterExtraBehaviour<ZaWarudoController>(null);
@@ -152,8 +157,32 @@ namespace KK_ZaWarudo
             _harmony?.UnpatchSelf();
         }
 
+        // F10 sub: dump female gauge value once per second to verify Accumulation Rate
+        // doesn't leak into non-frozen time. Set Plugin.GaugeDumpEnabled true to enable.
+        // Should show monotonic game-driven progression while NOT frozen, with a
+        // single discrete jump at each Resume(). Any other shape = bug.
+        internal const bool GaugeDumpEnabled = true;
+        private float _lastGaugeDump;
+        private void DumpGaugeIfNeeded()
+        {
+            if (!GaugeDumpEnabled) return;
+            var now = Time.realtimeSinceStartup;
+            if (now - _lastGaugeDump < 1f) return;
+            _lastGaugeDump = now;
+            var inst = TimeStopController.Instance;
+            if (inst == null) return;
+            try
+            {
+                var flags = inst.Flags;
+                if (flags == null) return;
+                LogI($"[gauge] f={flags.gaugeFemale:F1} m={flags.gaugeMale:F1} speedCalc={flags.speedCalc:F2} frozen={inst.IsFrozen}");
+            }
+            catch { }
+        }
+
         private void Update()
         {
+            DumpGaugeIfNeeded();
             if (!ToggleKey.Value.IsDown()) return;
 
             // KKAPI authoritative answer for "are we in an H scene right now"

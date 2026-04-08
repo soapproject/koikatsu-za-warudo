@@ -112,7 +112,9 @@ Recorded from a tester. Status updated as items get addressed.
   2. Blinking is driven by `fbsCtrl.BlinkCtrl`. Calling `ChangeEyesBlinkFlag(false)` on each subject (cached + restored on resume) stops the auto-blink.
   Side effect: `NeckLookControllerVer2` skip is type-level so the male protagonist's head also stops tracking — verify in playtest, may need per-instance gating.
 
-- **F2 — Woman moans + a "crumpling/boiling noise" play during freeze with zero input.** ✅ **Patched (nuclear).** Instead of hunting every audio source individually, set `AudioListener.pause = true` on freeze for a global mute. Our plugin AudioSource has `ignoreListenerPause = true` so SFX still plays. **Trade-off**: BGM is now also muted during freeze. The original spec said BGM should keep playing for immersion, but the user explicitly said "there should be no noises whatsoever besides any sounds the player makes" — accepting BGM mute as the new behavior. SPEC.md updated to reflect this.
+- **F2 — Woman moans + a "crumpling/boiling noise" play during freeze with zero input.** ✅ **Patched (two-part).**
+  1. Nuclear `AudioListener.pause = true` on freeze + plugin AudioSource has `ignoreListenerPause = true` so SFX still plays. Trade-off: BGM is also muted during freeze. SPEC updated.
+  2. **Re-evaluation**: the "crumpling/boiling noise" the tester reported was very likely **our own `zawarudo_female_during.wav` loop**, which is a clip extracted from a hentai anime — sounds like organic moans + fluid/SE that an unsuspecting tester would mistake for leaked game audio. Added new config `Audio > Play During Loop` (default true). Set false for true silence between Enter and Exit. Defaults stay loop-on, but when next playtester reports "I hear weird sounds during freeze", first ask whether they tried turning it off.
 
 - **F3 — On resume, woman screams once but mouth doesn't move and no subtitles appear; only one voice line variant.** Two real issues here:
   1. Our resume audio plays through *our* AudioSource, decoupled from the game's lip-sync / subtitle pipeline, so mouth and text don't follow.
@@ -125,11 +127,11 @@ Recorded from a tester. Status updated as items get addressed.
 
 - **F6 — Touching the female changes her expression even during freeze.** The touch → expression path bypasses `HMotionEyeNeck.Proc` (which we skip). Likely `HandCtrl` calls `ChangeEyesPtn`/`ChangeMouthPtn` directly via something like `HExpression` reaction system. Need to find that callsite and either skip-prefix it during freeze, or accept it (touching is intentional player action — could be a feature).
 
-- **F7 — Hair / skirt physics turn off when time freezes.** This is currently *intended*: our `FreezeFemaleBones` disables `DynamicBone` and `DynamicBone_Ver02`. User finds it ugly — they want hair/cloth to keep draping naturally during freeze (gravity-settled), not be locked mid-motion. Options to consider: don't disable DynamicBone at all (let physics keep simulating with the body frozen — bones will drape), or only disable for a moment then re-enable.
+- **F7 — Hair / skirt physics turn off when time freezes.** ✅ **Patched.** `FreezeFemaleBones` is now a no-op — DynamicBone solvers keep running, so with the body anchor locked (`animBody.speed = 0`) hair/cloth gradually settle into a natural drape under gravity instead of being frozen mid-swing. The `_disabledBones` cache and the restore loop in Resume are kept (harmless empty iterations) so the change is local to one method.
 
 - **F8 — Freezing time reverts an in-progress ahegao expression.** ✅ **Patched.** Snapshot `eyesPtn` / `mouthPtn` / `eyebrowPtn` / `tearsLv` / `eyesOpenMax` per subject on freeze. Re-applied on every `ReapplyIfFrozen` (covers partner switches and any race where the game wrote a default face before our prefix kicked in). Snapshot is dropped on resume so the game takes over normally.
 
-- **F9 — Fluid particles don't fall during freeze, until the female reaches a certain animation timestamp.** Our `ParticleSystem.Pause(true)` halts simulation entirely, so existing fluid blobs hang in mid-air. User wants gravity to keep working on existing particles (only stop emission of new ones). Switch from `Pause()` to setting the emission module enabled=false (cache + restore) so existing particles continue to simulate to ground.
+- **F9 — Fluid particles don't fall during freeze, until the female reaches a certain animation timestamp.** ✅ **Patched.** Switched from `ParticleSystem.Pause(true)` to toggling `EmissionModule.enabled = false`. Existing particles keep simulating (gravity, velocity, lifetime), so fluid blobs already in flight will continue falling to the ground. Only new spawns are suppressed. Cache type changed `HashSet<ParticleSystem>` → `Dictionary<ParticleSystem, bool>` to remember the original `enabled` state per system.
 
 - **F10 — Free H: cannot select HSprite UI buttons (speed up/down, auto, position change) while frozen.** ⏸ **Deferred — needs design rethink.** Investigation found the root cause: KK's HSonyu/HHoushi/HAibu state machines (`HSceneProc.LoopProc` callees) gate every action transition behind `flags.voiceWait` clearing, which only happens when (a) the animator state name reaches `Idle` / `Stop_Idle` AND (b) `IsCheckVoicePlay` returns true. We block both: `animBody.speed = 0` keeps the animator stuck mid-state, and our `HVoiceCtrl.VoiceProc` prefix prevents voice playback from completing. So the wait condition never resolves and any click intent (`flags.click = X`) sits in the queue forever.
 
@@ -141,7 +143,7 @@ Recorded from a tester. Status updated as items get addressed.
 
   Need to discuss with user before implementing. **For now this is a known limitation: in free H the player should unfreeze to interact with the UI, then refreeze.**
 
-  Sub-issue: user reports `Accumulation Rate` config "seems to affect non-frozen time as well". This shouldn't be happening — `InjectGauge()` is only called in `Resume()`. Could be perception (post-resume gauge bump appears continuous if you resume mid-progression), but verify with a full-cycle gauge log dump.
+  Sub-issue: user reports `Accumulation Rate` config "seems to affect non-frozen time as well". This shouldn't be happening — `InjectGauge()` is only called in `Resume()`. Added a 1Hz gauge dump in `Plugin.Update` (`Plugin.GaugeDumpEnabled = true` constant, log lines tagged `[gauge]`) so playtest can confirm: gauge progression should look monotonic and game-driven while NOT frozen, with one discrete jump at each Resume. Any other shape = real bug.
 
 ---
 
@@ -226,6 +228,9 @@ Note: the `latest` NuGet package is currently broken (missing `DotnetToolSetting
   > /tmp/full_asm.cs
 grep -n "animTongueEx\|gaugeFemale\|whatever" /tmp/full_asm.cs
 ```
+
+**More open-source plugins to mine for patterns** (the curated index):
+- [KK Plugins Compendium](https://github.com/Frostation/KK-Plugins-Compendium/blob/master/Plugins%20Compendium.md) — community-maintained list with descriptions and source links. First place to look when trying to figure out "has anyone already solved this for KK?". When a plugin from the compendium is relevant to a specific feature, clone its source under `references/<name>/` and grep just like with the existing references.
 
 **Important DLL paths**:
 - `Koikatu_Data/Managed/Assembly-CSharp.dll` — main game logic (HSceneProc, ChaControl, HFlag, Manager.*, etc.)

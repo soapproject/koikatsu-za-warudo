@@ -193,7 +193,7 @@ namespace KK_ZaWarudo
             Plugin.LogI("FreezeRoutine: begin");
             yield return PlayOneShotAndWait(_enter, "Enter");
 
-            if (_during != null)
+            if (_during != null && Plugin.PlayDuringLoop.Value)
             {
                 Plugin.LogI($"FreezeRoutine: starting During loop ({_during.name})");
                 _source.clip = _during;
@@ -205,7 +205,7 @@ namespace KK_ZaWarudo
             }
             else
             {
-                Plugin.LogI("FreezeRoutine: no During clip, idle.");
+                Plugin.LogI($"FreezeRoutine: idle (during={_during != null} enabled={Plugin.PlayDuringLoop.Value}).");
             }
         }
 
