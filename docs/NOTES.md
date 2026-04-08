@@ -116,16 +116,33 @@ Recorded from a tester. Status updated as items get addressed.
   1. Nuclear `AudioListener.pause = true` on freeze + plugin AudioSource has `ignoreListenerPause = true` so SFX still plays. Trade-off: BGM is also muted during freeze. SPEC updated.
   2. **Re-evaluation**: the "crumpling/boiling noise" the tester reported was very likely **our own `zawarudo_female_during.wav` loop**, which is a clip extracted from a hentai anime — sounds like organic moans + fluid/SE that an unsuspecting tester would mistake for leaked game audio. Added new config `Audio > Play During Loop` (default true). Set false for true silence between Enter and Exit. Defaults stay loop-on, but when next playtester reports "I hear weird sounds during freeze", first ask whether they tried turning it off.
 
-- **F3 — On resume, woman screams once but mouth doesn't move and no subtitles appear; only one voice line variant.** Two real issues here:
-  1. Our resume audio plays through *our* AudioSource, decoupled from the game's lip-sync / subtitle pipeline, so mouth and text don't follow.
-  2. Only one wav per slot → no variety. User suggestion: pool of clips selected at random, ideally context-aware (intercourse vs head etc).
-  Possible better path: invoke the game's own voice trigger (`Singleton<Voice>.Instance.Play(...)` or whatever HVoiceCtrl uses) so mouth + subtitles align, falling back to our wav only if we want a custom one.
+- **F3 — On resume, woman screams once but mouth doesn't move and no subtitles appear; only one voice line variant.** 🔍 **API found, design needed.** The game-side voice trigger is `Manager.Voice.Play(int no, string assetBundleName, string assetName, ...)` — verified via ilspy on `Manager.Voice` (line ~239). Returns a `Transform`, accepts pitch/delay/fade/voiceTrans/2D-or-3D parameters. KKS Subtitles plugin hooks `Manager.Voice.Play_Standby(AudioSource, Manager.Voice.Loader)` to inject captions, confirming this is the canonical path that drives mouth + subtitles + speaker UI.
 
-- **F4 — UI input is blocked / queued while the resume scream is playing.** Selecting anything during the resume window (~16s right now) just queues the action. Probably tied to KKAPI or some UI gating we don't own — but might also be us holding a coroutine that blocks input. Investigate.
+  **What we'd need**:
+  1. Knowledge of the right asset bundle + clip name for the female's "orgasm scream" voice (varies per character personality / voice slot). Bundles live under `sound/data/h/voice/<personality>/...`.
+  2. Pool of candidate voicelines for variety (user explicitly asked for "multiple lines").
+  3. Optional context-awareness (intercourse vs head, weak point hit, etc).
 
-- **F5 — Boop plugin does not work during freeze.** Boop hooks `HandCtrl` (touch / grab system). We're skipping `HMotionEyeNeck.Proc` etc., but Boop itself shouldn't be affected by our patches. May be that Boop relies on animator state which is `speed=0` now. **User explicitly wants Boop to work in frozen time** — needs investigation.
+  **Punt**: this is genuinely v0.2 work — needs research into the voice bundle layout per-character, plus a config UX for picking lines. For now keep the wav approach and just add config to disable the FemaleResume clip (those who want "no scream" can turn it off).
 
-- **F6 — Touching the female changes her expression even during freeze.** The touch → expression path bypasses `HMotionEyeNeck.Proc` (which we skip). Likely `HandCtrl` calls `ChangeEyesPtn`/`ChangeMouthPtn` directly via something like `HExpression` reaction system. Need to find that callsite and either skip-prefix it during freeze, or accept it (touching is intentional player action — could be a feature).
+- **F4 — UI input is blocked / queued while the resume scream is playing.** 🔍 **Root cause found, patch ready.** Same root as F10 main: KK's HSonyu/HHoushi state machine waits for `flags.voiceWait` to clear, which only happens when `IsCheckVoicePlay(0)` returns true (voice slot transitions to `breath` or finishes playing). Our `HVoiceCtrl.VoiceProc` / `BreathProc` prefix patches return false → voice slot state is never updated → IsCheckVoicePlay never trips → `voiceWait` stays true → state machine blocked → click intent queues forever.
+
+  **F4-only fix plan** (applies during the post-resume window where the animator IS unfrozen, so removing the voice prefix block actually unblocks the state machine):
+  1. Stop using `VoiceProc` / `BreathProc` prefix-skip for the post-resume mute window.
+  2. Instead, extend `AudioListener.pause = true` through the resume SFX duration (so game voice is actually muted globally).
+  3. Voice slot states then update normally → IsCheckVoicePlay → state machine ticks.
+  4. Trade-off: BGM stays muted ~16s longer than today.
+
+  This same mechanism is what we already use during freeze; F4 just needs the pause-unwind delayed past the resume SFX. Touch this when shipping the F6 fix.
+
+- **F5 — Boop plugin does not work during freeze.** ✅ **Likely auto-fixed by F7.** Read Boop's source ([references/KK_Plugins/src/Boop.Core/Boop.cs](../references/KK_Plugins/src/Boop.Core/Boop.cs)): it only patches `DynamicBone.SetupParticles` (postfix) to register bones, then runs its own `Update()` that reads mouse position and calls `db.ApplyForce(f)` on registered bones. No `HandCtrl` hook, no animator dependency. Boop was failing in v0.1 because we previously DISABLED every `DynamicBone` in `FreezeFemaleBones` — disabled components don't simulate, so applied forces did nothing. F7's no-op fix to that method means DynamicBones now stay live during freeze, so Boop's `ApplyForce` should work again. Verify in playtest.
+
+- **F6 — Touching the female changes her expression even during freeze.** 🔍 **Root cause found, patch ready.** The path is NOT through `HMotionEyeNeck.Proc`. `HSceneProc.Update` runs every frame and calls `face.SafeProc(f => f.OpenCtrl(female))` (line ~165419 of decompiled assembly). `FaceListCtrl.OpenCtrl` then writes:
+  - `female.ChangeEyesOpenMax(ans)` ← derived from `blendEye.Proc(ref ans)`
+  - `female.mouthCtrl.OpenMin = ans2` ← from `blendMouth.Proc(ref ans2)`
+  - `female.ChangeNipRate(rate)` ← derived from `flags.gaugeFemale * 0.01f`
+
+  **Fix plan**: Harmony prefix on `FaceListCtrl.OpenCtrl` returning false when frozen. Also consider prefix-skipping the `ChangeNipRate` line, but that's part of `HSceneProc.Update` itself — would need a different approach (transpile, or accept it).
 
 - **F7 — Hair / skirt physics turn off when time freezes.** ✅ **Patched.** `FreezeFemaleBones` is now a no-op — DynamicBone solvers keep running, so with the body anchor locked (`animBody.speed = 0`) hair/cloth gradually settle into a natural drape under gravity instead of being frozen mid-swing. The `_disabledBones` cache and the restore loop in Resume are kept (harmless empty iterations) so the change is local to one method.
 
@@ -133,7 +150,9 @@ Recorded from a tester. Status updated as items get addressed.
 
 - **F9 — Fluid particles don't fall during freeze, until the female reaches a certain animation timestamp.** ✅ **Patched.** Switched from `ParticleSystem.Pause(true)` to toggling `EmissionModule.enabled = false`. Existing particles keep simulating (gravity, velocity, lifetime), so fluid blobs already in flight will continue falling to the ground. Only new spawns are suppressed. Cache type changed `HashSet<ParticleSystem>` → `Dictionary<ParticleSystem, bool>` to remember the original `enabled` state per system.
 
-- **F10 — Free H: cannot select HSprite UI buttons (speed up/down, auto, position change) while frozen.** ⏸ **Deferred — needs design rethink.** Investigation found the root cause: KK's HSonyu/HHoushi/HAibu state machines (`HSceneProc.LoopProc` callees) gate every action transition behind `flags.voiceWait` clearing, which only happens when (a) the animator state name reaches `Idle` / `Stop_Idle` AND (b) `IsCheckVoicePlay` returns true. We block both: `animBody.speed = 0` keeps the animator stuck mid-state, and our `HVoiceCtrl.VoiceProc` prefix prevents voice playback from completing. So the wait condition never resolves and any click intent (`flags.click = X`) sits in the queue forever.
+- **F10 — Free H: cannot select HSprite UI buttons (speed up/down, auto, position change) while frozen.** ⏸ **Still deferred — partial unblock available, full fix needs design rethink.** Investigation found the root cause: KK's HSonyu/HHoushi/HAibu state machines (`HSceneProc.LoopProc` callees) gate every action transition behind `flags.voiceWait` clearing, which only happens when (a) the animator state name reaches `Idle` / `Stop_Idle` AND (b) `IsCheckVoicePlay` returns true. We block BOTH: `animBody.speed = 0` keeps the animator stuck mid-state, and our `HVoiceCtrl.VoiceProc` prefix prevents voice playback from completing. So the wait condition never resolves and any click intent (`flags.click = X`) sits in the queue forever.
+
+  **Partial unblock available**: removing the VoiceProc/BreathProc prefix patches (rely on `AudioListener.pause = true` for muting instead, same as F4's plan) would let voice slot states update naturally → IsCheckVoicePlay would track them → `voiceWait` could clear. But the animator block remains: state machine still can't transition out of "Loop" state because animBody.speed=0, so click intents still don't process. So this only fixes F4 (post-resume window where animator is unfrozen), not F10 main.
 
   **Possible solutions**, none clean:
   1. Don't freeze the animator at all — defeats the visual point of time stop.
