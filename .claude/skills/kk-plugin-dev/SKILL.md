@@ -16,6 +16,39 @@ This skill is the durable, verified-only knowledge base for working on `KK_ZaWar
 
 ---
 
+## Session startup procedure (READ THIS FIRST every time)
+
+Before writing any code or proposing any fix, **in this order**:
+
+1. **Read [`docs/SPEC.md`](../../../docs/SPEC.md)** end-to-end. It is the authoritative current design — freeze step list, configuration, KK classes patched, in-scope/out-of-scope. If your change conflicts with SPEC, either change SPEC first or you're going off-spec.
+
+2. **Read [`docs/NOTES.md`](../../../docs/NOTES.md) "Status overview"** at the top to learn:
+   - Which feedback IDs (F-series) are already fixed, deferred, or in-progress
+   - Which historical bugs (B-series) have been fixed and *why*
+   - Which risks (R-series) are known but unfixed
+   - The "Architecture revision" section for the current plan on the hardest open issues
+   - **Don't propose a fix that's already shipped, deferred, or known-broken** — the F-series table tells you which is which.
+
+3. **Read this entire skill (SKILL.md)** for the verified KK API surface, hard rules, anti-patterns, reference plugin map, and the architecture-level constraint that drives most open issues.
+
+4. **For any code change you're considering, do the API research FIRST** (don't iterate fixes blindly):
+   - **ilspy** the relevant KK class(es). See "Verification flow" below for the commands.
+   - **Grep `references/`** for any plugin that has already touched the same KK API. Copy their pattern (they've already debugged it).
+   - **Check the [Reference plugin map](#reference-plugin-map-what-to-grep-for-what)** in this skill for "if you want to do X, look at Y" entries.
+   - Only after you have at least one ilspy hit AND at least one reference-plugin precedent (or a clear comment that none exists) should you start writing the patch.
+
+5. **When you ship a change, you MUST update the docs in the same commit**:
+   - **SPEC.md** if you changed the freeze/resume step list, added/removed/renamed a config, added/removed a Harmony patch target, or changed an architectural decision in the "Core decisions" section.
+   - **NOTES.md** if you fixed an F-series feedback item (update the Status overview table emoji, write the "how" in the detail section), added a new bug, learned a new risk (add to R-series), discovered a new anti-pattern (add to dev rules), or changed the architecture plan.
+   - **SKILL.md** (this file) if you verified a new piece of KK API or KKAPI helper that's worth remembering, found a new useful reference plugin pattern, or added a new hard rule. **Skill content must be evidence-backed** — never write speculation here.
+   - The commit is incomplete if it changes code without updating these.
+
+6. **Run the [Pre-flight checklist](#pre-flight-checklist-before-committing-a-fix)** at the bottom of this skill before every commit.
+
+If you skip any of these steps you're in the failure mode that produced bugs B5 (`animFace` reflection lookup that did nothing because nobody verified the field existed) and B7 (`_extraMales` comment fabricating "KPlug additions" that didn't exist). Both were avoidable with a 60-second ilspy check.
+
+---
+
 ## Hard rules (DO NOT BREAK)
 
 These map 1:1 to the bug postmortems in [`docs/NOTES.md`](../../../docs/NOTES.md).
