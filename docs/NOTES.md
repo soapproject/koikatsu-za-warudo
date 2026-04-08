@@ -21,7 +21,7 @@ Pitfalls hit during development, risks found in audits, playtest feedback, and u
 | F9  | Fluid particles hang in mid-air during freeze | ✅ Fixed (emission off, not Pause) |
 | F10 main | Free H HSprite UI clicks blocked during freeze | ⏸ Deferred — needs design rethink |
 | F10 sub  | Gauge climbs during freeze ("Accumulation Rate leak") | ✅ Fixed (round-1 build) |
-| F11 | Grabbing the breast during freeze can't be released | 🔬 **Trick A shipped, needs playtest** — postfix on `HandCtrl.ClickAction` teleports the touch action layer's `normalizedTime` to 1 each frame (via `animBody.Play(stateHash, nLayer, 1f)`), letting the click→drag transition gate trip naturally. Mouse-up then runs through KK's own `ForceFinish` release path. Layer 0 is untouched so the body pose stays frozen. Plus `ForceFinish()` on Freeze entry to clean up any pre-existing grab. |
+| F11 | Grabbing the breast during freeze can't be released | 🔬 **Trick B (transpiler) shipped, needs playtest.** Trick A (Animator.Play teleport) was tried first and failed — playtest log showed `Play teleport: normalizedTime 0.000 -> 0.000` because Animator.Play needs the animator to tick to apply, and `animBody.speed = 0` halts the tick. Trick B replaces the IL `ldc.r4 1.0` threshold in `ClickAction` with a call returning `-1f` when frozen, so the gate always passes and the click→drag→ForceFinish release path runs. |
 
 ### Round 2 (after first fixes shipped)
 
@@ -37,7 +37,7 @@ Pitfalls hit during development, risks found in audits, playtest feedback, and u
 | F19 | Tabbing in/out makes menus disappear | ❓ Probably not us — Unity focus loss issue, needs repro |
 | F20 | Speed/auto/alternate UI works in free H **only if auto mode was enabled before freeze** | ⏸ Same root as F10 main, key insight noted |
 | F21 | Right-click alternate position: male moves to new position, female doesn't | ✅ Animator transition window — `ReapplyIfFrozen` now lets female animator run briefly (poll until target state has actually started, bound by 1s timeout) before re-pinning. Other locks stay engaged through the window. (verify) |
-| F22 | Can't grab / touch the female during freeze | 🔬 Same fix as F11 (Trick A — teleport action layer normalizedTime). Verify in playtest: clicking on body during freeze should grab + visually react without getting stuck, and mouse-up should release. |
+| F22 | Can't grab / touch the female during freeze | 🔬 Same fix as F11 (Trick B — transpile the `>= 1f` gate). Verify: clicking on body during freeze should grab + register without getting stuck, and mouse-up should release naturally via KK's own `DragAction → ForceFinish`. |
 
 Bug fixes from earlier audits (B-series) are below the F-series.
 
@@ -150,6 +150,22 @@ So the grab was stuck not because of voiceWait or the area judge, but because th
 Combined: at freeze time any in-progress grab is cleanly released, and during freeze no new grab is possible.
 
 **Side effect**: F22 below — the user loses the ability to grab/touch during freeze. Tracked separately as a wish.
+
+### Trick A failure note (for the record)
+Before Trick B, we tried **Trick A**: a Harmony postfix on `HandCtrl.ClickAction` that called `female.animBody.Play(stateHash, nLayer, 1f)` to teleport the touch action layer's `normalizedTime` past the 1-second gate. Offline analysis looked correct (layer 0 is master, action layer is non-zero, `Animator.Play` accepts an explicit normalizedTime). It shipped with rich logging and failed unambiguously in playtest:
+
+```
+[trickA] Play teleport: hand=204344 nLayer=4 normalizedTime 0.000 -> 0.000 (expected ~1.0)
+```
+
+`nLayer=4` confirmed the layer assumption was right (overlay, not master), but `normalizedTime` stayed at `0.000` after every `Play()` call. **Root cause**: `Animator.Play(stateHash, layer, normalizedTime)` doesn't apply the new state immediately — it queues it for the next animator tick. With `animBody.speed = 0`, the animator clock is halted → no tick → the queued state never applies → `normalizedTime` is never updated.
+
+**Lesson**: any Trick that depends on `Animator.Play` / `Animator.CrossFade` / animator state-info mutation needs the animator to actually tick. Under `animBody.speed = 0`, those APIs are no-ops. The only ways to bypass an animator-state gate while keeping the body visually frozen are:
+1. **Transpile the gate itself** (Trick B — what we shipped)
+2. **Spoof the read** (Trick D — patch `getAnimatorStateInfo` for specific callers)
+3. **Briefly un-freeze** (Trick E — defeats visual purpose)
+
+Don't waste a playtest cycle on Trick A again. Documented in SKILL.md "Animator quirks".
 
 ### F22 — Can't grab / touch the female during freeze ⏸
 Side-effect of the F11 fix. The user wants to be able to grab/touch during the freeze (the "frozen world but I can still interact" fantasy).

@@ -833,12 +833,17 @@ namespace KK_ZaWarudo
                     var delta = elapsed * Plugin.AccumulationRate.Value;
                     var before = _flags.gaugeFemale;
                     var cap = Plugin.AccumulationCap.Value;
-                    // Cap only applies as a ceiling for the INJECTED value — never
-                    // pulls the gauge DOWN if it's already above the cap.
-                    var target = Mathf.Min(100f, before + delta);
-                    if (before < cap) target = Mathf.Min(target, cap);
+                    // Cap is a hard ceiling on what Resume can inject the gauge UP TO.
+                    // Three cases:
+                    //   before >= cap → already over the cap; do not push further toward 100.
+                    //   before + delta < cap → safe to apply full delta.
+                    //   before < cap < before + delta → clamp to cap.
+                    // Resume never pulls the gauge DOWN.
+                    float target;
+                    if (before >= cap) target = before;
+                    else target = Mathf.Min(cap, before + delta);
                     _flags.gaugeFemale = target;
-                    Plugin.LogI($"Gauge {before:F1} → {_flags.gaugeFemale:F1} (+{delta:F1} over {elapsed:F1}s, cap={cap:F0}).");
+                    Plugin.LogI($"Gauge {before:F1} → {_flags.gaugeFemale:F1} (delta={delta:F1} requested over {elapsed:F1}s, cap={cap:F0}).");
                     break;
             }
         }

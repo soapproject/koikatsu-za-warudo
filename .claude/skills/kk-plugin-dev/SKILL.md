@@ -263,15 +263,31 @@ public HandAction action;       // current state (none/judge/action)
 public enum HandAction { none, judge, action }
 ```
 
-**Current freeze pattern (Trick A — verified offline, awaiting playtest)**:
-1. `ForceFinish()` on every hand on Freeze entry — clean slate.
-2. Harmony **postfix** on `HandCtrl.ClickAction` that, when frozen, teleports the touch action layer's `normalizedTime` to 1 via `female.animBody.Play(info.fullPathHash, nLayer, 1f)`.
-3. The next `ClickAction` invocation sees the gate `if (info.normalizedTime >= 1f)` pass, transitions to drag mode normally.
-4. Mouse-up triggers `DragAction → ForceFinish` via the unmodified KK release path.
+**Current freeze pattern (Trick B — Harmony Transpiler, shipped)**:
+1. `ForceFinish()` on every hand on Freeze entry — clean slate for any pre-existing grab.
+2. Harmony **transpiler** on `HandCtrl.ClickAction` rewrites the IL `if (info.normalizedTime >= 1f)` gate. The `ldc.r4 1.0` threshold instruction is replaced with a `call Hooks.TrickBGate()` that returns `-1f` when frozen, `1f` otherwise. While frozen, `normalizedTime >= -1` is always true → click→drag transition fires every frame → mouse-up runs through `DragAction → ForceFinish` naturally.
 
-**Why this works without un-freezing the body**: `ChaControl.setAllLayerWeight` iterates `for (int i = 1; i < animBody.layerCount; i++)` — confirming layer 0 is the master body pose and layers 1+ are overlays. `nLayer` (`= layer.layerActions[1].back.body` or `.front.body`) is one of the overlay layers, **never zero**. Calling `Animator.Play(stateHash, nLayer, 1f)` repositions ONLY that overlay layer; the master body (layer 0) stays frozen at its `animBody.speed = 0` state.
+**Why we needed Trick B (Trick A failed)**: the obvious-looking fix was `female.animBody.Play(stateHash, nLayer, 1f)` to teleport just the overlay layer's normalizedTime past the gate. Verified offline that the layer math was right (layer 0 is master, action layer is non-zero — see `setAllLayerWeight` skipping layer 0). Shipped with instrumentation. **Playtest log proved `Animator.Play` is a no-op under `animBody.speed = 0`**:
+```
+[trickA] Play teleport: hand=204344 nLayer=4 normalizedTime 0.000 -> 0.000
+```
+`Animator.Play` queues a state change for the next animator tick. With speed=0 the tick never happens → the queued change never applies. **Hard rule**: any KK API that mutates animator state via `Play`/`CrossFade`/state-info-write only works when the animator can actually tick.
 
-If Trick A turns out to fail in playtest (e.g. layer turns out to be 0 in some edge case, or `Animator.Play` doesn't behave as expected with a paused animator), the `nLayer <= 0` guard in the postfix prevents touching layer 0, and the worst case is the click stays stuck (existing F11 behavior, no regression).
+**Animator quirks under `speed = 0`** (verified):
+- `Animator.Play(hash, layer, normalizedTime)` — **NO-OP**. State change queued, never applied.
+- `Animator.GetCurrentAnimatorStateInfo(layer).normalizedTime` — frozen at the value when speed went to 0.
+- `Animator.CrossFade(...)` — almost certainly the same. Untested but assume no-op.
+- `Animator.layerCount`, `GetLayerWeight(i)` — work fine (don't depend on tick).
+- Direct field/property writes via reflection on `AnimatorStateInfo` — `AnimatorStateInfo` is a struct returned by value, so any `m_NormalizedTime` write only mutates the local copy.
+
+If you need to bypass an animator-state-driven gate during freeze, the options are:
+1. **Transpile the gate** (Trick B — what F11 uses)
+2. **Spoof the read** — patch `getAnimatorStateInfo` for the specific caller (Trick D, untried)
+3. **Briefly un-freeze** the animator (Trick E — defeats the visual freeze for the duration)
+
+NOT options:
+- ❌ `Animator.Play()` to a target normalizedTime (Trick A — proven dead)
+- ❌ Reflection writes to `AnimatorStateInfo` fields (struct, by-value, no effect on the animator)
 
 ### Other useful subsystems
 

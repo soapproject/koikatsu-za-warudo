@@ -183,160 +183,62 @@ namespace KK_ZaWarudo
             return true;
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // F11 / F22 — Trick B: Harmony Transpiler that rewrites HandCtrl.ClickAction's
+        // `if (info.normalizedTime >= 1f)` gate to also pass when frozen.
+        //
+        // Why this and not Trick A (Animator.Play teleport):
+        //   Trick A failed in playtest (commit 567ad43 log evidence). `Animator.Play()`
+        //   with an explicit normalizedTime requires the animator to actually tick to
+        //   apply the new position — and `animBody.speed = 0` halts that tick. The
+        //   normalizedTime stayed at 0.000 forever after every Play() call. Verified
+        //   via the [trickA] dump:
+        //     [trickA] Play teleport: hand=204344 nLayer=4 normalizedTime 0.000 -> 0.000
+        //
+        // Trick B replaces the threshold value. The IL pattern for `>= 1f` ends in
+        // `ldc.r4 1.0; <branch>`, where the branch jumps OUT of the if-body when the
+        // value is less than 1. We replace `ldc.r4 1.0` with a call to TrickBGate()
+        // which returns -1 when frozen — making `normalizedTime >= -1` always true,
+        // so the click→drag transition fires every frame during freeze. Mouse-up
+        // then runs through KK's own DragAction → ForceFinish release path.
+        // ─────────────────────────────────────────────────────────────────────
+
         /// <summary>
-        /// F11 / F22 — Trick A: keep grab WORKING during freeze by teleporting
-        /// the touch action layer's normalizedTime past 1 so ClickAction's gate
-        /// (HandCtrl.cs:147570 `if (info.normalizedTime >= 1f)`) trips and the
-        /// click→drag transition completes naturally. Drag mode then handles
-        /// mouse-up via ForceFinish like normal.
-        ///
-        /// Verified offline:
-        ///   - `setAllLayerWeight` iterates `for (int i=1; i<layerCount; i++)`
-        ///     → layer 0 is master, layers 1+ are overlays.
-        ///   - HandCtrl uses separate `useItems[i].layerAction.body` and
-        ///     `layerIdle.body` indices, switching weight between them — both
-        ///     are non-zero. So teleporting the action layer doesn't move the
-        ///     master body pose.
-        ///
-        /// Postfix runs AFTER ClickAction has read the gate this frame. We
-        /// teleport so the NEXT frame's ClickAction sees normalizedTime >= 1.
-        ///
-        /// Instrumented heavily so playtest can verify all 3 unverified assumptions:
-        ///   1. nLayer is non-zero (layer 0 = master body)
-        ///   2. animBody.Play() with explicit normalizedTime works under speed=0
-        ///   3. info.fullPathHash is the correct state hash to feed Play()
-        /// Logs throttled to "first frame per grab session" + "any state change"
-        /// to avoid spamming the log every frame.
+        /// Threshold helper used by the ClickAction transpiler. Returns -1 when
+        /// frozen (so the gate always passes), 1 otherwise (KK's normal behavior).
         /// </summary>
-        // Per-instance dedup: log entry once per grab session, not every frame.
-        // Keyed on the HandCtrl instance hash so multiple hands log independently.
-        private static readonly System.Collections.Generic.HashSet<int> _trickAReportedHands
-            = new System.Collections.Generic.HashSet<int>();
-        // Track ctrl state per hand so we can log the click→drag transition (success indicator)
-        private static readonly System.Collections.Generic.Dictionary<int, int> _trickALastCtrl
-            = new System.Collections.Generic.Dictionary<int, int>();
-
-        [HarmonyPostfix]
-        [HarmonyPatch(typeof(HandCtrl), "ClickAction")]
-        public static void ClickActionPost(HandCtrl __instance)
+        public static float TrickBGate()
         {
-            if (!Frozen())
+            return Frozen() ? -1f : 1f;
+        }
+
+        [HarmonyTranspiler]
+        [HarmonyPatch(typeof(HandCtrl), "ClickAction")]
+        public static System.Collections.Generic.IEnumerable<CodeInstruction> ClickActionTranspiler(System.Collections.Generic.IEnumerable<CodeInstruction> instructions)
+        {
+            var helper = AccessTools.Method(typeof(Hooks), nameof(TrickBGate));
+            var matcher = new CodeMatcher(instructions);
+
+            // Match: call get_normalizedTime ; ldc.r4 1.0
+            matcher.MatchForward(false,
+                new CodeMatch(i => i.opcode == System.Reflection.Emit.OpCodes.Call
+                                   && i.operand is System.Reflection.MethodInfo mi
+                                   && mi.Name == "get_normalizedTime"),
+                new CodeMatch(System.Reflection.Emit.OpCodes.Ldc_R4, 1f));
+
+            if (matcher.IsInvalid)
             {
-                // Reset session tracking when not frozen so the next freeze re-logs
-                if (_trickAReportedHands.Count > 0) _trickAReportedHands.Clear();
-                if (_trickALastCtrl.Count > 0) _trickALastCtrl.Clear();
-                return;
+                Plugin.LogE("[trickB] ClickAction transpiler FAILED — could not find `get_normalizedTime; ldc.r4 1.0` pattern. Patch inactive; F11/F22 will be broken.");
+                return matcher.InstructionEnumeration();
             }
-            try
-            {
-                var trav = Traverse.Create(__instance);
-                int actionUseItem = trav.Field("actionUseItem").GetValue<int>();
-                if (actionUseItem < 0) return;
-                var useItems = trav.Field("useItems").GetValue<System.Array>();
-                if (useItems == null || actionUseItem >= useItems.Length) return;
-                var useItem = useItems.GetValue(actionUseItem);
-                if (useItem == null) return;
 
-                // Pull the LayerInfo + nLayer the same way ClickAction does
-                var layer = Traverse.Create(useItem).Field("layer").GetValue();
-                if (layer == null) return;
-                var layerActions = Traverse.Create(layer).Field("layerActions").GetValue<System.Array>();
-                if (layerActions == null || layerActions.Length < 2) return;
-                var actionLayer1 = layerActions.GetValue(1);
-                if (actionLayer1 == null) return;
+            // matcher is at the get_normalizedTime instruction; advance to ldc.r4
+            matcher.Advance(1);
+            // Replace ldc.r4 1.0 with `call TrickBGate` (returns float, same stack effect)
+            matcher.SetAndAdvance(System.Reflection.Emit.OpCodes.Call, helper);
 
-                var female = trav.Field("female").GetValue<ChaControl>();
-                var flags = trav.Field("flags").GetValue<HFlag>();
-                if (female == null || female.animBody == null || flags == null) return;
-                bool isFront = flags.nowAnimationInfo.paramFemale.lstFrontAndBehind[0] == 0;
-                var bodyLayer = isFront
-                    ? Traverse.Create(actionLayer1).Field("front").GetValue()
-                    : Traverse.Create(actionLayer1).Field("back").GetValue();
-                int nLayer = Traverse.Create(bodyLayer).Field("body").GetValue<int>();
-
-                int handKey = __instance.GetInstanceID();
-
-                // First-time report for this grab session — captures everything
-                // we need to validate Trick A AND all the alternative tricks (B/C/D/E)
-                // in one playtest cycle.
-                if (!_trickAReportedHands.Contains(handKey))
-                {
-                    _trickAReportedHands.Add(handKey);
-                    int totalLayers = female.animBody.layerCount;
-                    var safeLayer = nLayer >= 0 && nLayer < totalLayers ? nLayer : 0;
-                    var infoBefore = female.animBody.GetCurrentAnimatorStateInfo(safeLayer);
-                    int curCtrlInit = (int)Traverse.Create(__instance).Field("ctrl").GetValue();
-                    var actionInit = (int)Traverse.Create(__instance).Field("action").GetValue();
-                    bool oneMoreInit = Traverse.Create(__instance).Field("oneMoreLoop").GetValue<bool>();
-                    var kind = Traverse.Create(useItem).Field("kindTouch").GetValue();
-
-                    Plugin.LogI($"[trickA] FIRST entry: hand={handKey} useItem={actionUseItem} kind={kind} isFront={isFront} action={actionInit}(0=none/1=judge/2=action) ctrl={curCtrlInit}(0=click/1=drag/2=kiss?) oneMoreLoop={oneMoreInit}");
-                    Plugin.LogI($"[trickA]   nLayer={nLayer} (totalLayers={totalLayers}) stateHash=0x{infoBefore.fullPathHash:X8} stateName={infoBefore.shortNameHash:X8}");
-                    Plugin.LogI($"[trickA]   normalizedTime={infoBefore.normalizedTime:F3} length={infoBefore.length:F2}s loop={infoBefore.loop} animBody.speed={female.animBody.speed:F2}");
-
-                    // Trick B/D context: dump the IsDrag state + the cloth gate so we know
-                    // whether the click→drag transition condition would even trip if normalizedTime DID reach 1.
-                    try
-                    {
-                        bool isDrag = flags.IsDrag();
-                        // GetClothState is private; reflect.
-                        int clothState = -1;
-                        try
-                        {
-                            var m = AccessTools.Method(typeof(HandCtrl), "GetClothState", new[] { typeof(HandCtrl.AibuColliderKind) });
-                            if (m != null) clothState = (int)m.Invoke(__instance, new[] { kind });
-                        } catch { }
-                        var plays = Traverse.Create(layer).Field("plays").GetValue<int[]>();
-                        int playValue = (clothState >= 0 && plays != null && clothState < plays.Length) ? plays[clothState] : -1;
-                        Plugin.LogI($"[trickA]   gate context: flags.IsDrag()={isDrag} clothState={clothState} layer.plays[clothState]={playValue} (transition fires when both pass)");
-                    }
-                    catch (System.Exception e2) { Plugin.LogW($"[trickA]   gate context dump failed: {e2.Message}"); }
-
-                    // For all overlay layers, dump current state — diagnoses whether Trick A's
-                    // teleport will affect anything visible (we want overlays only, not 0).
-                    for (int i = 0; i < totalLayers; i++)
-                    {
-                        var li = female.animBody.GetCurrentAnimatorStateInfo(i);
-                        float w = i == 0 ? 1f : female.animBody.GetLayerWeight(i);
-                        Plugin.LogI($"[trickA]   layer{i}: weight={w:F2} stateHash=0x{li.fullPathHash:X8} normalizedTime={li.normalizedTime:F3}");
-                    }
-                }
-
-                if (nLayer <= 0)
-                {
-                    // Safety: never touch layer 0. If this fires, our layer assumption was wrong.
-                    if (_trickAReportedHands.Contains(handKey)) {
-                        Plugin.LogW($"[trickA] BAILED — nLayer={nLayer} is layer 0 or invalid; refusing to teleport master body. Trick A inactive for this grab.");
-                        // Mark so we don't spam the warning every frame
-                        _trickAReportedHands.Add(-handKey);
-                    }
-                    return;
-                }
-
-                var info = female.animBody.GetCurrentAnimatorStateInfo(nLayer);
-
-                // Log ctrl transitions (success indicator for Trick A)
-                int curCtrl = (int)Traverse.Create(__instance).Field("ctrl").GetValue();
-                int prevCtrl = _trickALastCtrl.TryGetValue(handKey, out var p) ? p : -1;
-                if (prevCtrl != curCtrl)
-                {
-                    _trickALastCtrl[handKey] = curCtrl;
-                    Plugin.LogI($"[trickA] ctrl change: hand={handKey} {prevCtrl} -> {curCtrl} (0=click 1=drag 2=kiss?) at normalizedTime={info.normalizedTime:F3}");
-                }
-
-                if (info.normalizedTime < 1f)
-                {
-                    // Teleport this single layer's state to normalizedTime = 1.
-                    // animBody.speed = 0 means the animator clock is paused, but
-                    // Animator.Play() with explicit normalizedTime forces position.
-                    float before = info.normalizedTime;
-                    female.animBody.Play(info.fullPathHash, nLayer, 1f);
-                    var infoAfter = female.animBody.GetCurrentAnimatorStateInfo(nLayer);
-                    // Verify the teleport worked. Only log when before<1 to avoid spam.
-                    Plugin.LogI($"[trickA] Play teleport: hand={handKey} nLayer={nLayer} normalizedTime {before:F3} -> {infoAfter.normalizedTime:F3} (expected ~1.0)");
-                }
-            }
-            catch (System.Exception e) { Plugin.LogW($"[trickA] ClickActionPost: {e.Message}"); }
+            Plugin.LogI("[trickB] ClickAction normalizedTime gate transpiled successfully — grab during freeze enabled.");
+            return matcher.InstructionEnumeration();
         }
 
         /// <summary>

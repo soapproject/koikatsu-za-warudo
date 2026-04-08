@@ -60,7 +60,7 @@ In addition to the per-step state, the following **Harmony prefixes** are active
 | `HMotionEyeNeckFemale.Proc` / `HMotionEyeNeckMale.Proc` | Block per-frame writes to eye/neck/face/eyebrow/tears patterns. |
 | `HSeCtrl.Proc` | Block slap / body-contact SE. |
 | `EyeLookController.LateUpdate` | Block iris/pupil tracking the camera (separate component from `HMotionEyeNeck.Proc` and from neck rotation). |
-| `HandCtrl.ClickAction` (postfix) | F11/F22 Trick A: while frozen, postfix teleports the touch action layer's state to `normalizedTime = 1f` via `animBody.Play(stateHash, nLayer, 1f)`. This makes ClickAction's gate `if (info.normalizedTime >= 1f)` trip on the next call → click→drag transition runs naturally → mouse-up triggers `ForceFinish` → grab releases. Layer 0 (master body) is unaffected because the touch layer is a separate Animator layer (verified via `setAllLayerWeight` skipping layer 0). |
+| `HandCtrl.ClickAction` (transpiler) | F11/F22 Trick B: rewrites the IL of the `if (info.normalizedTime >= 1f)` gate so it also passes when frozen. The `ldc.r4 1.0` threshold is replaced with a call to `Hooks.TrickBGate()` which returns `-1f` when frozen and `1f` otherwise. While frozen, `normalizedTime >= -1` is always true → click→drag transition fires → mouse-up runs through KK's own `DragAction → ForceFinish` release path. Trick A (Animator.Play teleport) was tried first and failed because `Animator.Play` requires the animator clock to tick, which is exactly what `animBody.speed = 0` halts. |
 | `HFlag.FemaleGaugeUp` / `MaleGaugeUp` | Block gauge increments from the still-running simulation backend. |
 | `HSceneProc.ChangeAnimator` (postfix) | Re-pin freeze on partner / position switch. |
 | `VRHScene.ChangeAnimator` (postfix, conditional) | Same, on VR builds. Patched via reflection at plugin load — absent on non-VR. |
@@ -180,6 +180,6 @@ A 1 Hz `[gauge]` dump (toggleable via `Plugin.GaugeDumpEnabled`) prints `f=… m
 | `HMotionEyeNeckMale.Proc` | prefix | Same for male slots |
 | `HSeCtrl.Proc` | prefix | Block per-frame slap / body-contact SE |
 | `EyeLookController.LateUpdate` | prefix | Block iris/pupil camera tracking |
-| `HandCtrl.ClickAction` | postfix | Trick A — teleport touch action layer's normalizedTime to 1 so the click→drag→ForceFinish release path completes during freeze (F11/F22) |
+| `HandCtrl.ClickAction` | transpiler | Trick B — rewrite the `>= 1f` gate so it also passes when frozen, letting the click→drag→ForceFinish release path complete (F11/F22) |
 | `HFlag.FemaleGaugeUp` | prefix | Block per-frame gauge tick from the still-running simulation backend |
 | `HFlag.MaleGaugeUp` | prefix | Same for the male gauge |
