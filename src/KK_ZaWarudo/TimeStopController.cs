@@ -215,13 +215,18 @@ namespace KK_ZaWarudo
         // ReapplyIfFrozen call so an in-progress ahegao isn't reverted to default.
         private struct FaceState { public int eyes; public int mouth; public int eyebrow; public byte tears; public float eyesOpen; }
         private readonly Dictionary<ChaControl, FaceState> _savedFaces = new Dictionary<ChaControl, FaceState>();
-        private float _savedSpeedCalc;
         private bool _savedAudioListenerPause;
         // Belt-and-braces gauge lock (paired with HFlag.FemaleGaugeUp/MaleGaugeUp prefix).
         // FemaleGaugeUp early-returns if lockGugeFemale is true (and the caller isn't
         // forcing). InjectGauge writes gaugeFemale directly so it bypasses this lock.
         private bool _savedLockFemale;
         private bool _savedLockMale;
+        // Note: we no longer save/restore HFlag.speedCalc. Setting it to 0 was futile
+        // because HFlag.WaitSpeedProc (called every frame from HSonyu.Proc) immediately
+        // re-derives it from Time.deltaTime + click input. We now USE that live value
+        // as the "is player thrusting" signal in IsPlayerActing — so we WANT it to keep
+        // tracking real input. The gauge tick is blocked separately by the
+        // FemaleGaugeUp/MaleGaugeUp prefixes and the lockGuge* flags.
 
         public static void Bind(MonoBehaviour proc, List<ChaControl> females, ChaControl male, List<ChaControl> extraMales, HFlag flags, HandCtrl hand0 = null, HandCtrl hand1 = null, HVoiceCtrl voice = null, List<HActionBase> lstProc = null)
         {
@@ -293,16 +298,17 @@ namespace KK_ZaWarudo
             FreezeFemaleAnimators();
             Plugin.LogI($"  step1 animators cached={_animSpeeds.Count}");
 
-            // 2. HFlag.speedCalc + gauge locks (belt-and-braces with the GaugeUp prefixes)
+            // 2. Gauge locks (belt-and-braces with the GaugeUp prefixes).
+            // We deliberately do NOT touch HFlag.speedCalc — the game's WaitSpeedProc
+            // recomputes it every frame anyway, and we need it live to detect "player
+            // is thrusting" in IsPlayerActing.
             if (_flags != null)
             {
-                _savedSpeedCalc = _flags.speedCalc;
-                _flags.speedCalc = 0f;
                 _savedLockFemale = _flags.lockGugeFemale;
                 _savedLockMale = _flags.lockGugeMale;
                 _flags.lockGugeFemale = true;
                 _flags.lockGugeMale = true;
-                Plugin.LogI($"  step2 speedCalc {_savedSpeedCalc} -> 0  gaugeFemale={_flags.gaugeFemale:F1} gaugeMale={_flags.gaugeMale:F1} locks=set");
+                Plugin.LogI($"  step2 gauge locks set; gaugeFemale={_flags.gaugeFemale:F1} gaugeMale={_flags.gaugeMale:F1}");
             }
             else Plugin.LogW("  step2 flags=null, skipped");
 
@@ -430,10 +436,9 @@ namespace KK_ZaWarudo
 
             if (_flags != null)
             {
-                _flags.speedCalc = _savedSpeedCalc;
                 _flags.lockGugeFemale = _savedLockFemale;
                 _flags.lockGugeMale = _savedLockMale;
-                Plugin.LogI($"  restored speedCalc={_savedSpeedCalc} locks=({_savedLockFemale},{_savedLockMale})");
+                Plugin.LogI($"  restored gauge locks=({_savedLockFemale},{_savedLockMale})");
             }
 
             InjectGauge();
@@ -785,7 +790,8 @@ namespace KK_ZaWarudo
                 }
                 catch (System.Exception e) { Plugin.LogW($"  ForceFinishHands failed: {e.Message}"); }
             }
-            Plugin.LogI($"  step4e1 hands force-finished={finished}");
+            // Only log when something actually fired — silent when nothing to clean up.
+            if (finished > 0) Plugin.LogI($"  step4e1 hands force-finished={finished}");
         }
 
         private void StopFemaleVoices()

@@ -39,7 +39,7 @@ Frozen subjects = every entry in `lstFemale` plus non-protagonist males (`male1`
 | Step | Target | Action |
 |---|---|---|
 | 1 | Subject `Animator`s | `animBody.speed = 0` and `animTongueEx.speed = 0` (the only two Animators ChaInfo exposes — verified via ilspy) |
-| 2 | `HFlag.speedCalc` + gauge locks | `speedCalc` cached and set to 0 (game overwrites this every frame, mostly informational). `lockGugeFemale` and `lockGugeMale` cached and set to true as a belt-and-braces partner for the step-6 prefix. |
+| 2 | Gauge locks | `lockGugeFemale` and `lockGugeMale` cached and set to true as a belt-and-braces partner for the step-6 prefix. We deliberately leave `HFlag.speedCalc` alone — it's recomputed every frame by `WaitSpeedProc` and we use the live value as the "is player thrusting" signal in `IsPlayerActing`. |
 | 3 | Subject `DynamicBone` / `DynamicBone_Ver02` | **No-op** (intentional) so hair/cloth keep simulating and gradually drape under gravity instead of locking mid-swing. |
 | 4 | Every `ParticleSystem` under the H-scene root | `EmissionModule.enabled = false` cached + restored — existing particles keep simulating (gravity, lifetime), only new spawns are suppressed. |
 | 4b | Each subject's current mouth voice slot | `Manager.Voice.Instance.Stop(flags.transVoiceMouth[i])` to kill in-flight voice. |
