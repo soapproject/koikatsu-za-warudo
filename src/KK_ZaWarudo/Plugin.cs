@@ -54,6 +54,7 @@ namespace KK_ZaWarudo
         internal static ConfigEntry<string> FemaleResumeSfxFile;// 4. 結束時女角
         internal static ConfigEntry<float> SfxVolume;
         internal static ConfigEntry<bool> PlayDuringLoop;
+        internal static ConfigEntry<bool> DuringOnlyWhileActive;
 
         internal static Plugin Instance;
         private Harmony _harmony;
@@ -137,6 +138,10 @@ namespace KK_ZaWarudo
             PlayDuringLoop = Config.Bind("Audio", "Play During Loop",
                 true,
                 "Play the female 'during' voice loop while frozen. Disable for true silence after Enter SFX (the loop is what playtesters sometimes mistake for leaked game audio).");
+
+            DuringOnlyWhileActive = Config.Bind("Audio", "During Loop Only While Active",
+                true,
+                "Only play the during loop while the player is actively touching the female (HandCtrl.IsItemTouch / IsAction). Otherwise the loop plays continuously while frozen. Set false for unconditional loop.");
 
             // KKAPI manages the HScene start/end lifecycle for us (incl. VR).
             // See ZaWarudoController.OnStartH/OnEndH.

@@ -180,6 +180,13 @@ namespace KK_ZaWarudo
             }
         }
 
+        private static bool ShouldPlayDuring()
+        {
+            if (!Plugin.PlayDuringLoop.Value) return false;
+            if (!Plugin.DuringOnlyWhileActive.Value) return true; // unconditional loop
+            return TimeStopController.Instance != null && TimeStopController.Instance.IsPlayerActing;
+        }
+
         private float CurrentVolume()
         {
             float master = 1f;
@@ -193,19 +200,31 @@ namespace KK_ZaWarudo
             Plugin.LogI("FreezeRoutine: begin");
             yield return PlayOneShotAndWait(_enter, "Enter");
 
-            if (_during != null && Plugin.PlayDuringLoop.Value)
+            // During loop tick: each frame decide whether the loop should be playing
+            // based on (a) config (Play During Loop) and (b) optionally whether the
+            // player is actively touching (During Loop Only While Active).
+            // The source is single, so toggling Play/Stop here cleanly without overlap.
+            Plugin.LogI($"FreezeRoutine: entering During tick (during={_during != null} enabled={Plugin.PlayDuringLoop.Value} gated={Plugin.DuringOnlyWhileActive.Value})");
+            bool playing = false;
+            while (true) // until coroutine is cancelled by ResumeSequence/StopAll
             {
-                Plugin.LogI($"FreezeRoutine: starting During loop ({_during.name})");
-                _source.clip = _during;
-                _source.loop = true;
-                _source.volume = CurrentVolume();
-                _source.Play();
-                // Coroutine sits here until cancelled by ResumeSequence/StopAll.
-                while (true) yield return null;
-            }
-            else
-            {
-                Plugin.LogI($"FreezeRoutine: idle (during={_during != null} enabled={Plugin.PlayDuringLoop.Value}).");
+                bool shouldPlay = ShouldPlayDuring();
+                if (shouldPlay && !playing && _during != null)
+                {
+                    _source.clip = _during;
+                    _source.loop = true;
+                    _source.volume = CurrentVolume();
+                    _source.Play();
+                    playing = true;
+                    Plugin.LogI("  during loop START (player active)");
+                }
+                else if (!shouldPlay && playing)
+                {
+                    _source.Stop();
+                    playing = false;
+                    Plugin.LogI("  during loop STOP (player idle)");
+                }
+                yield return null;
             }
         }
 

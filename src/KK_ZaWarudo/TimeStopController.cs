@@ -27,6 +27,28 @@ namespace KK_ZaWarudo
         // We only need .gameObject / GetComponentsInChildren on it, so MonoBehaviour suffices.
         private MonoBehaviour _proc;
         private List<ChaControl> _females;
+        private HandCtrl _hand0;
+        private HandCtrl _hand1;
+
+        /// <summary>
+        /// True when the player is actively interacting with the female (touching,
+        /// grabbing, kissing). Used by AudioManager to gate the during-loop so it
+        /// only plays while the player is actually doing something. Tolerates
+        /// missing hand controllers (returns false).
+        /// </summary>
+        public bool IsPlayerActing
+        {
+            get
+            {
+                try
+                {
+                    if (_hand0 != null && (_hand0.IsItemTouch() || _hand0.IsAction())) return true;
+                    if (_hand1 != null && (_hand1.IsItemTouch() || _hand1.IsAction())) return true;
+                }
+                catch { }
+                return false;
+            }
+        }
         // _male = protagonist, intentionally untouched per spec.
         // _extraMales currently sourced from HSceneProc.male1 only (darkness mode).
         // Vanilla HSceneProc has exactly two ChaControl male slots (male, male1) —
@@ -78,7 +100,7 @@ namespace KK_ZaWarudo
         private float _savedSpeedCalc;
         private bool _savedAudioListenerPause;
 
-        public static void Bind(MonoBehaviour proc, List<ChaControl> females, ChaControl male, List<ChaControl> extraMales, HFlag flags)
+        public static void Bind(MonoBehaviour proc, List<ChaControl> females, ChaControl male, List<ChaControl> extraMales, HFlag flags, HandCtrl hand0 = null, HandCtrl hand1 = null)
         {
             // Defensive: if a previous HScene didn't tear down (BepInEx hot reload,
             // KKAPI re-init, double-fire of MapSameObjectDisable), drop the old
@@ -97,6 +119,8 @@ namespace KK_ZaWarudo
                 _females = females,
                 _extraMales = extraMales,
                 _flags = flags,
+                _hand0 = hand0,
+                _hand1 = hand1,
             };
         }
 

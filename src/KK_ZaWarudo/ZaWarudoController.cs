@@ -28,8 +28,15 @@ namespace KK_ZaWarudo
                 var extras = new List<ChaControl>();
                 if (male1 != null) extras.Add(male1);
 
-                Plugin.LogI($"OnStartH (vr={vr}, freeH={hFlag?.isFreeH}): females={females?.Count ?? -1} male={(male != null ? male.name : "null")} extraMales={extras.Count}");
-                TimeStopController.Bind(proc, females, male, extras, hFlag);
+                // Hand controllers — used to detect player action intensity for the
+                // during-loop gating. HSceneProc and VRHScene both expose `hand`/`hand1`
+                // as public HandCtrl fields. Traverse returns null on miss, IsPlayerActing
+                // tolerates that.
+                var hand0 = trav.Field("hand").GetValue<HandCtrl>();
+                var hand1 = trav.Field("hand1").GetValue<HandCtrl>();
+
+                Plugin.LogI($"OnStartH (vr={vr}, freeH={hFlag?.isFreeH}): females={females?.Count ?? -1} male={(male != null ? male.name : "null")} extraMales={extras.Count} hand0={(hand0 != null)} hand1={(hand1 != null)}");
+                TimeStopController.Bind(proc, females, male, extras, hFlag, hand0, hand1);
             }
             catch (System.Exception e)
             {
