@@ -35,6 +35,8 @@ Pitfalls hit during development, risks found in audits, playtest feedback, and u
 | F17 | Groping animations pause along with female animations (player hand grip animation lives on the same animator) | ⏸ Architectural — fundamentally tied to `animBody.speed=0` |
 | F18 | Male orgasm starts during freeze, never finishes, plays no sound; female orgasm prevents action selection | ⏸ Same root as F10 main + F15 (gauge that already crossed threshold before freeze) |
 | F19 | Tabbing in/out makes menus disappear | ❓ Probably not us — Unity focus loss issue, needs repro |
+| F20 | Speed/auto/alternate UI works in free H **only if auto mode was enabled before freeze** | ⏸ Same root as F10 main, key insight noted |
+| F21 | Right-click alternate position: male moves to new position, female doesn't | ⏸ Our `ReapplyIfFrozen` keeps female pinned at old animator state — male is unfrozen so he advances |
 
 Bug fixes from earlier audits (B-series) are below the F-series.
 
@@ -171,6 +173,29 @@ Round-2 mitigations:
 
 ### F19 — Tabbing in/out makes menus disappear ❓
 Almost certainly not caused by us. Unity focus-loss behavior, probably interaction with another plugin or game itself. Worth verifying with our plugin disabled.
+
+### F20 — Speed/auto/alternate UI works in free H ONLY when auto was enabled before freeze ⏸
+**Useful new detail on F10 main**. Tester reports:
+- If `auto` mode was ON before pressing T → speed slider still responds during freeze
+- Cannot toggle auto on/off itself during freeze
+- Cannot click alternate-position buttons during freeze
+
+**Why this makes sense given the root cause**: when auto is on, the game's state machine ticks autonomously without waiting for click input. `flags.speedCalc` is recomputed by `WaitSpeedProc` every frame from `Time.deltaTime` regardless of `voiceWait` (we don't patch `WaitSpeedProc`), so an auto-driven speed change goes through. **Click-based** transitions (toggling auto, position change) however require `voiceWait` to clear, which we block via the animator-frozen state machine deadlock.
+
+Implication: a "tap unfreeze for 1 frame to accept the click" workaround would actually fit nicely here — a hotkey that briefly drops the freeze long enough for HSprite click handlers to register, then refreezes. Cheaper than the full bone-cache rewrite.
+
+### F21 — Right-click alternate position: male moves, female stays put ⏸
+**Architectural smoking gun**. Tester triggers an alternate position via right-click while frozen. The state transition succeeds for the male (his animator advances to the new position) but the female stays glued to the old position.
+
+**Cause**: `HSceneProc.ChangeAnimator` postfix calls our `ReapplyIfFrozen()`, which iterates `FrozenSubjects()` (= females + extra males, NOT the protagonist) and re-pins their `Animator.speed = 0`. The protagonist isn't in the set, so his animator runs normally and reaches the new position. The female's animator was just retargeted to the new state by `ChangeAnimator` but our re-pin immediately stops it before the new state's first frame plays — so she's visually stuck at the OLD position's last frame.
+
+**Fix idea**: introduce a "transition window" in `ReapplyIfFrozen()`. When `ChangeAnimator` fires while frozen, instead of immediately re-pinning at speed=0:
+1. Let the female's animator run at normal speed for N frames (e.g. ~0.5 s) so her body finishes transitioning into the new pose
+2. Then re-pin to speed=0
+
+Cleanest implementation: spawn a coroutine on `ChangeAnimator` postfix that yields N frames before calling `ReapplyIfFrozen()`. During the window, the head pin and other locks (gauge, voice, blink, face) stay engaged — only the animator speed is allowed to advance briefly. This is much narrower in scope than the full bone-cache redesign and might actually be the right move.
+
+**Open question**: does the male/female alternate-position transition take a fixed number of frames, or does it depend on the animation length? If variable, the coroutine should poll the animator state name and wait for it to settle into the target loop state, not a fixed frame count.
 
 ---
 
