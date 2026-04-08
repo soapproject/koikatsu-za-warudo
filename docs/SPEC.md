@@ -105,7 +105,7 @@ In order:
 | Audio | 4. Female Resume SFX | string | `zawarudo_female_resume.wav` | Plays after Exit finishes |
 | Audio | SFX Volume | float (0–1) | `1.0` | Relative volume; multiplied by the game master volume |
 | Audio | Play During Loop | bool | `true` | Master switch for the during loop. Disable for true silence between Enter and Exit. |
-| Audio | During Loop Only While Active | bool | `true` | Only play the during loop while the player is actively touching the female (`HandCtrl.IsItemTouch` / `IsAction`). When false, the loop plays continuously while frozen. |
+| Audio | During Loop Only While Active | bool | `true` | Only play the during loop while the player is actively driving an action — either grabbing/touching (`HandCtrl.IsItemTouch` / `IsAction`) or thrusting (`flags.speedCalc > 0.05`). When false, the loop plays continuously while frozen. The active-only default matches the "学園で時間よ止まれ" feel: silent unless the protagonist is doing something. |
 
 **Filename convention**: `zawarudo_<role>_<phase>.wav` where `role ∈ { sfx, female }` and `phase ∈ { enter, during, exit, resume }`. The `zawarudo_` prefix prevents collisions with other plugins sharing the `bgm/` directory. The plugin **does not ship copyrighted audio** — users drop their own wavs.
 

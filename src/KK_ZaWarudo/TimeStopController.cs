@@ -36,10 +36,19 @@ namespace KK_ZaWarudo
         private List<HActionBase> _lstProc;
 
         /// <summary>
-        /// True when the player is actively interacting with the female (touching,
-        /// grabbing, kissing). Used by AudioManager to gate the during-loop so it
-        /// only plays while the player is actually doing something. Tolerates
-        /// missing hand controllers (returns false).
+        /// True when the player is actively driving an action against the female.
+        /// Two distinct signals are unioned:
+        ///   1. Hand grab / touch — `HandCtrl.IsItemTouch()` / `IsAction()`
+        ///   2. Body thrusting — `flags.speedCalc > threshold`. KK's `WaitSpeedProc`
+        ///      lerps speedCalc up when the player presses speed-up clicks (intercourse
+        ///      modes) and down when idle. So speedCalc is essentially "how hard is
+        ///      the player driving the body action right now". Confirmed via playtest
+        ///      log: speedCalc was observed going 0.00 → 0.12 → 0.53 → 0.97 → 1.00
+        ///      while frozen as the player issued speed-up inputs.
+        ///
+        /// This is the "学園で時間よ止まれ" gating: silent unless the protagonist is
+        /// actively doing something. Used by AudioManager to gate the during-loop.
+        /// Tolerates missing hand controllers (returns false).
         /// </summary>
         public bool IsPlayerActing
         {
@@ -49,6 +58,7 @@ namespace KK_ZaWarudo
                 {
                     if (_hand0 != null && (_hand0.IsItemTouch() || _hand0.IsAction())) return true;
                     if (_hand1 != null && (_hand1.IsItemTouch() || _hand1.IsAction())) return true;
+                    if (_flags != null && _flags.speedCalc > 0.05f) return true;
                 }
                 catch { }
                 return false;
