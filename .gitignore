@@ -9,5 +9,7 @@ obj/
 .vs/
 runtime_inspect/
 
-# Claude Code workspace settings (per-machine, may contain local paths and permissions)
-.claude/
+# Claude Code per-machine settings (may contain local paths and permissions).
+# Project skills under .claude/skills/ ARE checked in (shared knowledge base).
+.claude/*
+!.claude/skills/

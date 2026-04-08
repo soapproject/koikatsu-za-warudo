@@ -197,6 +197,52 @@ Cleanest implementation: spawn a coroutine on `ChangeAnimator` postfix that yiel
 
 **Open question**: does the male/female alternate-position transition take a fixed number of frames, or does it depend on the animation length? If variable, the coroutine should poll the animator state name and wait for it to settle into the target loop state, not a fixed frame count.
 
+**Survey result**: yes, variable. KK_HSceneOptions has the exact pattern in [`HSceneOptions.cs:446`](../references/KK_HSceneOptions/KK_HSceneOptions/HSceneOptions.cs#L446):
+```csharp
+internal static IEnumerator RunAfterTransition(Action action) {
+    yield return new WaitUntil(() =>
+        lstFemale[0]?.animBody.GetCurrentAnimatorStateInfo(0).IsName(flags.nowAnimStateName) ?? true);
+    action();
+}
+```
+We can copy this pattern but we **must** un-pin the female's `animBody.speed` first — otherwise the state never advances and `WaitUntil` never resolves.
+
+---
+
+## Architecture revision (after round-2 survey of reference plugins)
+
+Before round 2 the plan was vague ("rebuild freeze with bone cache + reapply"). After surveying `KK_HSceneOptions/AnimationToggle.cs` two concrete, narrower paths emerged. **Path B is small enough to ship next; Path A needs UX discussion first.**
+
+### Path A — Tap-unfreeze hotkey (solves F10 main / F11 / F16 / F17)
+
+A second hotkey that briefly drops the animator-pinning portion of the freeze (sets `animBody.speed = 1`, removes the `VoiceProc/BreathProc` prefix path, clears `lockGugeFemale`) for 1–2 frames, lets `flags.click` get processed naturally, then refreezes. Everything else (head pin, blink, face snapshot, AudioListener.pause, particle emission off) stays engaged the whole time.
+
+**Variant**: instead of timed unfreeze, manually invoke `loopProcDelegate.Invoke(true)` once or twice — the same trick `KK_HSceneOptions.AnimationToggle.ManualOrgasm` uses to force the orgasm sequence to progress without waiting for normal Update tick.
+
+**UX questions to resolve before coding**:
+- Hold-to-tick or tap-to-tick?
+- Same hotkey as toggle (e.g. double-tap), or separate?
+- Does the audio mute lift during the tick?
+
+### Path B — Transition window on `ChangeAnimator` (solves F21, helps F11)
+
+When `HSceneProc.ChangeAnimator` postfix fires while frozen, instead of immediately calling `ReapplyIfFrozen()`:
+1. Spawn a coroutine on the plugin GameObject
+2. Restore `animBody.speed = (saved per-character speed)` for the frozen subjects
+3. `yield return new WaitUntil(() => female.animBody.GetCurrentAnimatorStateInfo(0).IsName(flags.nowAnimStateName))` — copied from `RunAfterTransition`
+4. Re-pin `animBody.speed = 0` and call `ReapplyIfFrozen()` for the rest
+5. Throughout: head pin, voice mute, gauge lock, face snapshot, blink, particles all stay engaged — only the animator briefly advances
+
+This is small (one coroutine, ~30 lines of code) and very safe — the new behavior is gated on a `_frozen && ChangeAnimatorJustFired` condition. Worst case if the WaitUntil hangs (e.g. animator state name never matches), bound by a timeout (e.g. 1.0 s) and force-pin back.
+
+**Concrete next-round task**: ship Path B, verify F21 visually (female and male both end up in the new alternate position), confirm F11 (release after switching to a different position works) as a side effect.
+
+### What we should NOT do (verified anti-patterns)
+
+- **Don't replace `animBody.speed = 0` with bone-cache + reapply each LateUpdate.** Expensive, fragile, reinvents the animator. Reach for it only as a last resort.
+- **Don't try to make the state machine tick with the animator frozen.** It's not designed to. KK's own internal forced-orgasm uses `loopProcDelegate.Invoke()` *with the animator running*.
+- **Don't add more prefix patches that block more KK methods** without first checking if there's an in-game per-instance flag (like `neckLookScript.skipCalc`). Type-level prefixes have side effects (R8) and per-instance flags are the documented pattern.
+
 ---
 
 ## Note about config visibility (round-2 user reported "no new configs in options")
