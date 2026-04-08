@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.Linq;
+using HarmonyLib;
 using UnityEngine;
 
 namespace KK_ZaWarudo
@@ -29,6 +31,9 @@ namespace KK_ZaWarudo
         private List<ChaControl> _females;
         private HandCtrl _hand0;
         private HandCtrl _hand1;
+        private HVoiceCtrl _voice;
+        public HVoiceCtrl Voice => _voice;
+        private List<HActionBase> _lstProc;
 
         /// <summary>
         /// True when the player is actively interacting with the female (touching,
@@ -61,6 +66,103 @@ namespace KK_ZaWarudo
         {
             if (_females != null) foreach (var f in _females) if (f != null) yield return f;
             if (_extraMales != null) foreach (var m in _extraMales) if (m != null) yield return m;
+        }
+
+        /// <summary>First non-null female, or null. Used by Plugin's state-machine dump.</summary>
+        public ChaControl GetFirstFemale()
+        {
+            if (_females == null) return null;
+            foreach (var f in _females) if (f != null) return f;
+            return null;
+        }
+
+        /// <summary>
+        /// F18 / lead A: escape hatch when an orgasm sequence is stuck during freeze.
+        /// Implements the KK_HSceneOptions ManualOrgasm pattern (AnimationToggle.cs:218):
+        ///   1. Force voice slot states to `breath` so IsCheckVoicePlay() returns true
+        ///   2. Reflectively invoke LoopProc(true) twice on the active HActionBase
+        ///      to advance the state machine through the orgasm sequence
+        ///
+        /// Should only be called when frozen AND `flags.finish != none` — using it
+        /// otherwise just runs LoopProc twice for no reason.
+        ///
+        /// Returns the number of LoopProc invocations (0 if nothing to do).
+        /// </summary>
+        public int UnblockStuckOrgasm()
+        {
+            if (_flags == null || _voice == null) return 0;
+            if (_flags.finish == HFlag.FinishKind.none)
+            {
+                Plugin.LogI("[unblock] flags.finish=none — nothing stuck, skipping.");
+                return 0;
+            }
+            try
+            {
+                // Spoof voice slots to breath state — IsCheckVoicePlay() will then return true
+                if (_voice.nowVoices != null)
+                {
+                    for (int i = 0; i < _voice.nowVoices.Length; i++)
+                        if (_voice.nowVoices[i] != null)
+                            _voice.nowVoices[i].state = HVoiceCtrl.VoiceKind.breath;
+                }
+
+                // Find the active HActionBase that matches the current mode (HSonyu/HHoushi/HAibu/etc)
+                var proc = ResolveActiveProc();
+                if (proc == null)
+                {
+                    Plugin.LogW("[unblock] no active HActionBase resolved for mode=" + _flags.mode);
+                    return 0;
+                }
+
+                // Invoke LoopProc(bool) reflectively. Two passes lets the state machine
+                // settle the click intent and then transition. Pattern lifted from
+                // KK_HSceneOptions.AnimationToggle.ManualOrgasm.
+                var loopProcMethod = AccessTools.Method(proc.GetType(), "LoopProc", new System.Type[] { typeof(bool) });
+                if (loopProcMethod == null)
+                {
+                    Plugin.LogW("[unblock] LoopProc(bool) not found on " + proc.GetType().Name);
+                    return 0;
+                }
+
+                int invocations = 0;
+                for (int i = 0; i < 2; i++)
+                {
+                    try { loopProcMethod.Invoke(proc, new object[] { true }); invocations++; }
+                    catch (System.Exception e) { Plugin.LogW($"[unblock] LoopProc invoke #{i} threw: {e.Message}"); }
+                }
+                Plugin.LogI($"[unblock] {proc.GetType().Name}.LoopProc invoked {invocations}x, finish was {_flags.finish}");
+                return invocations;
+            }
+            catch (System.Exception e)
+            {
+                Plugin.LogW($"[unblock] failed: {e.Message}");
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// Resolve which HActionBase subtype is active for the current mode.
+        /// Pattern lifted from KK_HSceneOptions.AnimationToggle.FindProc.
+        /// Returns null if mode is unrecognized or lstProc is empty.
+        /// </summary>
+        private HActionBase ResolveActiveProc()
+        {
+            if (_lstProc == null || _flags == null) return null;
+            // Use System.Linq.OfType<T>() to scan lstProc for the matching subtype.
+            // Cannot use a switch on _flags.mode + generics here because mode→type
+            // mapping is one-to-one but the type list is not exhaustive in all builds.
+            switch (_flags.mode)
+            {
+                case HFlag.EMode.sonyu:        return _lstProc.OfType<HSonyu>().FirstOrDefault();
+                case HFlag.EMode.houshi:       return _lstProc.OfType<HHoushi>().FirstOrDefault();
+                case HFlag.EMode.aibu:         return _lstProc.OfType<HAibu>().FirstOrDefault();
+                case HFlag.EMode.lesbian:      return _lstProc.OfType<HLesbian>().FirstOrDefault();
+                case HFlag.EMode.masturbation: return _lstProc.OfType<HMasturbation>().FirstOrDefault();
+                // 3P / darkness modes use class names that may not exist on every KK build
+                // — fall through to first-element grab to avoid build-time references.
+                default:
+                    return _lstProc.Count > 0 ? _lstProc[0] : null;
+            }
         }
 
         private bool _frozen;
@@ -111,7 +213,7 @@ namespace KK_ZaWarudo
         private bool _savedLockFemale;
         private bool _savedLockMale;
 
-        public static void Bind(MonoBehaviour proc, List<ChaControl> females, ChaControl male, List<ChaControl> extraMales, HFlag flags, HandCtrl hand0 = null, HandCtrl hand1 = null)
+        public static void Bind(MonoBehaviour proc, List<ChaControl> females, ChaControl male, List<ChaControl> extraMales, HFlag flags, HandCtrl hand0 = null, HandCtrl hand1 = null, HVoiceCtrl voice = null, List<HActionBase> lstProc = null)
         {
             // Defensive: if a previous HScene didn't tear down (BepInEx hot reload,
             // KKAPI re-init, double-fire of MapSameObjectDisable), drop the old
@@ -132,6 +234,8 @@ namespace KK_ZaWarudo
                 _flags = flags,
                 _hand0 = hand0,
                 _hand1 = hand1,
+                _voice = voice,
+                _lstProc = lstProc,
             };
         }
 
@@ -346,23 +450,90 @@ namespace KK_ZaWarudo
 
         /// <summary>
         /// Called from HSceneProc.ChangeAnimator postfix when frozen — re-pin
-        /// EVERY freeze step on the (possibly new) active set: animators, bones,
-        /// particles, the in-flight voice slots, and any AudioSources that just
-        /// started playing on the new partner. The HashSet caches dedupe so this
-        /// is safe to call repeatedly.
+        /// EVERY freeze step on the (possibly new) active set.
+        ///
+        /// F21 transition window: if `Plugin.AnimatorTransitionWindow.Value` is true,
+        /// don't re-pin animators immediately. Instead let the female animator run
+        /// at normal speed for a short window so the new state can actually start
+        /// playing (otherwise our re-pin freezes her at the OLD state's last frame —
+        /// observed in playtest as "male moves to alternate position, female stays
+        /// glued to old pose"). All other locks (head pin, voice mute, blink, face
+        /// snapshot, gauge lock, AudioListener.pause) stay engaged through the window.
         /// </summary>
         public void ReapplyIfFrozen()
         {
             if (!_frozen || _proc == null) return;
-            FreezeFemaleAnimators();
+
+            // Non-animator state — always re-pin immediately
             FreezeFemaleBones();
             FreezeParticles();
-            StopFemaleVoices();    // re-stop voice slots — new partner may have new mouth bindings
-            FreezeFemaleAudio();   // catches any AudioSource that started playing during the switch
-            DisableBlink();        // F1: cover newly-bound subjects
-            FreezeNeckLook();      // Issue 1+5: cover newly-bound subjects' neck/head
-            SnapshotAndPinFace();  // F8: re-pin in case the switch reset the face
+            StopFemaleVoices();
+            FreezeFemaleAudio();
+            DisableBlink();
+            FreezeNeckLook();
+            SnapshotAndPinFace();
             if (_flags != null) _flags.speedCalc = 0f;
+
+            // Animator: either pin immediately, or run a transition window first
+            if (Plugin.AnimatorTransitionWindow.Value && Plugin.Instance != null)
+            {
+                Plugin.LogI("[transition] starting animator transition window");
+                Plugin.Instance.StartCoroutine(AnimatorTransitionThenPin());
+            }
+            else
+            {
+                FreezeFemaleAnimators();
+            }
+        }
+
+        /// <summary>
+        /// F21: lets the female's animBody.speed run normally for a brief window so
+        /// the new animation state (queued by HSceneProc.ChangeAnimator → SetPlay) can
+        /// actually begin playing. Wait condition copied from KK_HSceneOptions.RunAfterTransition:
+        /// poll until the animator's current state name matches `flags.nowAnimStateName`
+        /// AND its normalizedTime has advanced past 0.05. Bound by a hard timeout so a
+        /// stuck transition doesn't hang the freeze forever.
+        /// </summary>
+        private System.Collections.IEnumerator AnimatorTransitionThenPin()
+        {
+            float deadline = Time.realtimeSinceStartup + Plugin.AnimatorTransitionTimeoutSec.Value;
+            string targetState = _flags != null ? _flags.nowAnimStateName : null;
+
+            // Briefly let females run at speed=1 (overwrite our cached zero — the
+            // restore on resume reads from _animSpeeds which still holds the original)
+            if (_females != null)
+            {
+                foreach (var f in _females)
+                {
+                    if (f != null && f.animBody != null) f.animBody.speed = 1f;
+                }
+            }
+
+            int spinFrames = 0;
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                spinFrames++;
+                bool settled = true;
+                if (_females != null && targetState != null)
+                {
+                    foreach (var f in _females)
+                    {
+                        if (f == null || f.animBody == null) continue;
+                        var info = f.animBody.GetCurrentAnimatorStateInfo(0);
+                        if (!info.IsName(targetState) || info.normalizedTime < 0.05f)
+                        {
+                            settled = false;
+                            break;
+                        }
+                    }
+                }
+                if (settled) break;
+                yield return null;
+            }
+
+            // Re-pin
+            FreezeFemaleAnimators();
+            Plugin.LogI($"[transition] animator transition window complete after {spinFrames} frame(s); re-pinned");
         }
 
         // ---------- helpers ----------

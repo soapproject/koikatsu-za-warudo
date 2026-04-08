@@ -83,10 +83,13 @@ In order:
 
 | Section | Key | Type | Default | Notes |
 |---|---|---|---|---|
-| General | Toggle Key | KeyboardShortcut | `T` | Hotkey |
+| General | Toggle Key | KeyboardShortcut | `T` | Freeze/unfreeze hotkey |
+| General | Unblock Orgasm Key | KeyboardShortcut | `U` | F18 escape hatch — when frozen mid-orgasm, spoofs voice slots and reflectively invokes the active `HActionBase.LoopProc(true)` twice to advance the state machine through the orgasm sequence |
 | General | Toggle Cooldown | float (0–5) | `0.3` | Minimum seconds between toggles. Prevents SFX chopping and gauge spam from rapid presses. |
 | General | Resume Mode | enum {Instant, Accumulated} | `Accumulated` | How gauge is injected on resume |
 | General | Accumulation Rate | float (0–100) | `10.0` | Gauge points per frozen second (Accumulated only) |
+| Advanced | Animator Transition Window | bool | `true` | F21 fix — let the female animator run briefly during `ChangeAnimator` so the new position can start playing before we re-pin |
+| Advanced | Animator Transition Timeout | float (0.1–5) | `1.0` | Max seconds to wait for the new animator state to settle |
 | Climax Face | Enable | bool | `false` | Force a climax face on each female on resume, held for the duration of the resume SFX |
 | Climax Face | Eyes Pattern | int (0–20) | `4` | `ChangeEyesPtn` index |
 | Climax Face | Mouth Pattern | int (0–20) | `5` | `ChangeMouthPtn` index |

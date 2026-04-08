@@ -37,6 +37,7 @@ namespace KK_ZaWarudo
 
         // General
         internal static ConfigEntry<KeyboardShortcut> ToggleKey;
+        internal static ConfigEntry<KeyboardShortcut> UnblockOrgasmKey;
         internal static ConfigEntry<float> ToggleCooldown;
         internal static ConfigEntry<ResumeMode> Mode;
         internal static ConfigEntry<float> AccumulationRate;
@@ -45,6 +46,8 @@ namespace KK_ZaWarudo
         internal static ConfigEntry<int> ClimaxMouthPtn;
         internal static ConfigEntry<int> ClimaxEyebrowPtn;
         internal static ConfigEntry<int> ClimaxTearsLv;
+        internal static ConfigEntry<bool> AnimatorTransitionWindow;
+        internal static ConfigEntry<float> AnimatorTransitionTimeoutSec;
 
         // Audio
         internal static ConfigEntry<string> SfxFolder;
@@ -72,6 +75,10 @@ namespace KK_ZaWarudo
                 0.3f,
                 new ConfigDescription("Minimum seconds between freeze/unfreeze toggles. Prevents SFX chopping and gauge spam from rapid presses.",
                     new AcceptableValueRange<float>(0f, 5f)));
+
+            UnblockOrgasmKey = Config.Bind("General", "Unblock Orgasm Key",
+                new KeyboardShortcut(KeyCode.U),
+                "F18 escape hatch: when an orgasm sequence is stuck during freeze (animator state can't advance), press this to spoof voice slots and force the state machine forward via reflection-invoked HActionBase.LoopProc(true). Only does anything when frozen AND flags.finish != none.");
 
             Mode = Config.Bind("General", "Resume Mode",
                 ResumeMode.Accumulated,
@@ -105,6 +112,15 @@ namespace KK_ZaWarudo
                 3,
                 new ConfigDescription("ChaControl.tearsLv (0=none, 3=max).",
                     new AcceptableValueRange<int>(0, 3)));
+
+            AnimatorTransitionWindow = Config.Bind("Advanced", "Animator Transition Window",
+                true,
+                "F21 fix: when ChangeAnimator fires while frozen (player switches position / partner), let the female animator briefly run at normal speed so the new state can actually start playing, then re-pin. Without this, the female stays glued to her last pose at the OLD position. All other locks (head pin, voice mute, blink) stay engaged through the window.");
+
+            AnimatorTransitionTimeoutSec = Config.Bind("Advanced", "Animator Transition Timeout",
+                1.0f,
+                new ConfigDescription("Maximum seconds to wait for the new animator state to settle before forcibly re-pinning. Prevents a missed state transition from hanging the freeze forever.",
+                    new AcceptableValueRange<float>(0.1f, 5f)));
 
             SfxFolder = Config.Bind("Audio", "SFX Folder",
                 Path.Combine(Paths.PluginPath, "bgm/zawarudo"),
@@ -167,7 +183,12 @@ namespace KK_ZaWarudo
         // Should show monotonic game-driven progression while NOT frozen, with a
         // single discrete jump at each Resume(). Any other shape = bug.
         internal const bool GaugeDumpEnabled = true;
+        // Lead E: per-frame state-machine snapshot for triaging F10/F16/F21 etc.
+        // Set true to dump animState/click/voiceWait/voice slots/finish at 1 Hz.
+        // Off by default — only enable while actively debugging state machine issues.
+        internal const bool StateMachineDumpEnabled = true;
         private float _lastGaugeDump;
+        private float _lastStateDump;
         private void DumpGaugeIfNeeded()
         {
             if (!GaugeDumpEnabled) return;
@@ -185,6 +206,41 @@ namespace KK_ZaWarudo
             catch { }
         }
 
+        private void DumpStateMachineIfNeeded()
+        {
+            if (!StateMachineDumpEnabled) return;
+            var now = Time.realtimeSinceStartup;
+            if (now - _lastStateDump < 1f) return;
+            _lastStateDump = now;
+            var inst = TimeStopController.Instance;
+            if (inst == null) return;
+            try
+            {
+                var flags = inst.Flags;
+                if (flags == null) return;
+                var f0 = inst.GetFirstFemale();
+                string animState = "?";
+                float animT = -1f;
+                if (f0 != null && f0.animBody != null)
+                {
+                    var info = f0.animBody.GetCurrentAnimatorStateInfo(0);
+                    animT = info.normalizedTime;
+                    animState = flags.nowAnimStateName ?? "?";
+                }
+                var voice = inst.Voice;
+                int v0 = voice != null && voice.nowVoices != null && voice.nowVoices.Length > 0
+                    ? (int)voice.nowVoices[0].state : -1;
+                int v1 = voice != null && voice.nowVoices != null && voice.nowVoices.Length > 1
+                    ? (int)voice.nowVoices[1].state : -1;
+                LogI($"[sm] anim={animState} t={animT:F2} click={flags.click} voiceWait={flags.voiceWait} v0={v0} v1={v1} finish={flags.finish} frozen={inst.IsFrozen}");
+            }
+            catch (System.Exception e)
+            {
+                // Don't spam errors if a field is missing on some build — disable silently for the session
+                LogW($"[sm] dump failed once: {e.Message}");
+            }
+        }
+
         // Issue 1+5: re-pin frozen subjects' head bone localRotation after every
         // LateUpdate, so any system that overwrites it (residual animator/IK/constraint)
         // gets immediately reverted to the snapshot taken at freeze time.
@@ -196,6 +252,15 @@ namespace KK_ZaWarudo
         private void Update()
         {
             DumpGaugeIfNeeded();
+            DumpStateMachineIfNeeded();
+
+            // F18 escape hatch — only does anything if we're frozen mid-orgasm
+            if (UnblockOrgasmKey.Value.IsDown())
+            {
+                LogI("Unblock-orgasm hotkey pressed.");
+                TimeStopController.Instance?.UnblockStuckOrgasm();
+            }
+
             if (!ToggleKey.Value.IsDown()) return;
 
             // KKAPI authoritative answer for "are we in an H scene right now"

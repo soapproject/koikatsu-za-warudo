@@ -365,6 +365,7 @@ These can coexist. Path B is the narrower fix and lower risk; Path A is a UX fea
 
 ## Pre-flight checklist before committing a fix
 
+- [ ] **Is this fixing a real reported symptom (an F-series feedback item) or am I scope-creeping?** If there's no F-ID this addresses, stop and ask.
 - [ ] Did I run all 5 verification flow steps for every new KK API I touched?
 - [ ] Does the fix preserve every hard rule (1–14)?
 - [ ] If I added a step to `Freeze()`, did I also update `ReapplyIfFrozen()`?
@@ -372,5 +373,6 @@ These can coexist. Path B is the narrower fix and lower risk; Path A is a UX fea
 - [ ] If I added a config, does it have a sensible default that doesn't change existing behavior unless opted-in?
 - [ ] Did I update [`docs/SPEC.md`](../../../docs/SPEC.md) freeze-step table or config table?
 - [ ] Did I update [`docs/NOTES.md`](../../../docs/NOTES.md) Status overview if a feedback ID changed state?
+- [ ] Did I update this SKILL if I verified a new piece of KK API or a useful pattern?
 - [ ] Did I commit the build, copy the dll into the runtime plugins folder, and verify mtime?
 - [ ] Did I `grep "ZAWA>"` the test log to confirm the fix actually fired?

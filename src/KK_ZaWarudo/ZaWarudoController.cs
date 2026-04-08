@@ -35,8 +35,18 @@ namespace KK_ZaWarudo
                 var hand0 = trav.Field("hand").GetValue<HandCtrl>();
                 var hand1 = trav.Field("hand1").GetValue<HandCtrl>();
 
-                Plugin.LogI($"OnStartH (vr={vr}, freeH={hFlag?.isFreeH}): females={females?.Count ?? -1} male={(male != null ? male.name : "null")} extraMales={extras.Count} hand0={(hand0 != null)} hand1={(hand1 != null)}");
-                TimeStopController.Bind(proc, females, male, extras, hFlag, hand0, hand1);
+                // HVoiceCtrl is `voice` on HSceneProc (and VRHScene). Used by the
+                // state-machine debug dump to read nowVoices[i].state, and by the
+                // F18 unblock helper to spoof voice slots.
+                var voiceCtrl = trav.Field("voice").GetValue<HVoiceCtrl>();
+
+                // lstProc holds the active HActionBase instances (HSonyu/HHoushi/HAibu/etc).
+                // Used by F18 unblock helper to find the active proc and invoke its
+                // LoopProc reflectively (KK_HSceneOptions.AnimationToggle.FindProc pattern).
+                var lstProc = trav.Field("lstProc").GetValue<List<HActionBase>>();
+
+                Plugin.LogI($"OnStartH (vr={vr}, freeH={hFlag?.isFreeH}): females={females?.Count ?? -1} male={(male != null ? male.name : "null")} extraMales={extras.Count} hand0={(hand0 != null)} hand1={(hand1 != null)} voice={(voiceCtrl != null)} lstProc={lstProc?.Count ?? -1}");
+                TimeStopController.Bind(proc, females, male, extras, hFlag, hand0, hand1, voiceCtrl, lstProc);
             }
             catch (System.Exception e)
             {

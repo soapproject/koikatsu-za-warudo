@@ -33,10 +33,10 @@ Pitfalls hit during development, risks found in audits, playtest feedback, and u
 | F15 | Female gauge sometimes still ticks in increments during freeze | ✅ Belt-and-braces: now also sets `flags.lockGugeFemale = true` (paired with the existing `HFlag.FemaleGaugeUp` prefix). Same for male. |
 | F16 | Free H control: speed/auto/position works in some animation states but not others (insertion / pulling out / orgasm) | ⏸ Same root as F10 main, with state-dependence detail |
 | F17 | Groping animations pause along with female animations (player hand grip animation lives on the same animator) | ⏸ Architectural — fundamentally tied to `animBody.speed=0` |
-| F18 | Male orgasm starts during freeze, never finishes, plays no sound; female orgasm prevents action selection | ⏸ Same root as F10 main + F15 (gauge that already crossed threshold before freeze) |
+| F18 | Male orgasm starts during freeze, never finishes, plays no sound; female orgasm prevents action selection | ✅ Escape hatch added — `U` hotkey runs voice spoof + `LoopProc(true)` ×2 to advance the stuck sequence (verify) |
 | F19 | Tabbing in/out makes menus disappear | ❓ Probably not us — Unity focus loss issue, needs repro |
 | F20 | Speed/auto/alternate UI works in free H **only if auto mode was enabled before freeze** | ⏸ Same root as F10 main, key insight noted |
-| F21 | Right-click alternate position: male moves to new position, female doesn't | ⏸ Our `ReapplyIfFrozen` keeps female pinned at old animator state — male is unfrozen so he advances |
+| F21 | Right-click alternate position: male moves to new position, female doesn't | ✅ Animator transition window — `ReapplyIfFrozen` now lets female animator run briefly (poll until target state has actually started, bound by 1s timeout) before re-pinning. Other locks stay engaged through the window. (verify) |
 
 Bug fixes from earlier audits (B-series) are below the F-series.
 
@@ -236,6 +236,52 @@ When `HSceneProc.ChangeAnimator` postfix fires while frozen, instead of immediat
 This is small (one coroutine, ~30 lines of code) and very safe — the new behavior is gated on a `_frozen && ChangeAnimatorJustFired` condition. Worst case if the WaitUntil hangs (e.g. animator state name never matches), bound by a timeout (e.g. 1.0 s) and force-pin back.
 
 **Concrete next-round task**: ship Path B, verify F21 visually (female and male both end up in the new alternate position), confirm F11 (release after switching to a different position works) as a side effect.
+
+### Leads discovered while writing the SKILL (post-survey, not yet shipped)
+
+These came out of the second pass through KK_HSceneOptions and the act of writing the verified-API skill. None are speculative — each cites a specific reference plugin pattern or ilspy-verified API.
+
+**A — F18 (male orgasm stuck) escape hatch via voice-state spoof.**
+[`KK_HSceneOptions/AnimationToggle.cs:218`](../references/KK_HSceneOptions/KK_HSceneOptions/AnimationToggle.cs#L218) `ManualOrgasm` shows the trick: set `voice.nowVoices[i].state = HVoiceCtrl.VoiceKind.breath` for both slots, then call `loopProcDelegate.Invoke(true)` twice. This makes `IsCheckVoicePlay()` return true without any actual voice playing → `voiceWait` clears → orgasm sequence advances. We can ship this as a manual "Unblock Orgasm" hotkey for stuck states. F15 should prevent the trigger in the first place but this is the escape valve when something slips through.
+
+**B — F3 (resume scream no mouth/subtitles) might be doable in v0.1.**
+`Manager.Voice.Play(int no, ..., Transform voiceTrans, ...)` accepts a `voiceTrans` (`flags.transVoiceMouth[i]`) which is what drives lip-sync. KKS Subtitles plugin hooks `Manager.Voice.Play_Standby(AudioSource, Loader)` which takes a pre-existing AudioSource — that might be a path to feed our own clip through KK's voice/subtitle pipeline. Needs more ilspy on `Play_Standby` to confirm the AudioSource pre-load shape, but if it works F3 is no longer a v0.2 problem.
+
+**C — F21 (alternate position female stuck) — precise transition window timing.**
+`HSceneProc.ChangeAnimator` updates `flags.nowAnimStateName` and queues the new animator state via `SetPlay`, but the animator doesn't actually play any frame of the new state until the next Update. Our postfix re-pin fires before that next Update, so the female's animator sees `speed = 0` before frame 1 of the new state ever runs. Fix:
+```csharp
+yield return new WaitUntil(() =>
+    f.animBody.GetCurrentAnimatorStateInfo(0).normalizedTime > 0.05f &&
+    f.animBody.GetCurrentAnimatorStateInfo(0).IsName(flags.nowAnimStateName));
+```
+Wait until the new state is **actually** playing, not just queued. Bound by a 1-second timeout so a missed transition doesn't hang the freeze forever. Other locks (head pin, voice mute, gauge lock) stay engaged through the window.
+
+**D — `AnimationToggle` MonoBehaviour-on-HSceneProc is a cleaner architecture.**
+[`KK_HSceneOptions/Hooks.cs:53`](../references/KK_HSceneOptions/KK_HSceneOptions/Hooks.cs#L53) `__instance.gameObject.AddComponent<AnimationToggle>()`. Lifecycle automatically tied to HSceneProc — no Bind/Unbind plumbing needed. Our `Plugin.LateUpdate` (head pin), `Plugin.Update` (gauge dump, hotkey) currently run on the plugin GameObject every frame even outside HScene. Refactoring those to a per-HScene Component is cleaner and slightly cheaper. Defer to a "tidy-up" round, not blocking anything.
+
+**E — State-machine debug dump.**
+For triaging F10/F16/F21 / debug Path A/B implementations, we need per-frame visibility into:
+- `flags.nowAnimStateName`
+- `flags.click`
+- `flags.voiceWait`
+- `voice.nowVoices[0/1].state`
+- `flags.finish`
+- Animator's actual state info (`normalizedTime`, name hash)
+
+Add `Plugin.StateMachineDumpEnabled` constant (default false) + 1 Hz dump similar to the existing `[gauge]` dump, only enabled when debugging. Cheap, safe.
+
+**F — Pre-flight checklist scope-creep guard.**
+Added "Is this fixing a real reported symptom (an F-series item) or am I scope-creeping?" as the first checklist item in SKILL.md. Avoids the failure mode of fixing things nobody complained about while real bugs sit unaddressed.
+
+### Round 2 ship status (awaiting playtest verification)
+
+**Before doing any of the leads above, the user should test the round-2 build (commit `5b56905` or later)** to confirm:
+- F12 — eye iris no longer tracks the camera
+- F13 — head no longer snaps to a default pose at freeze moment
+- F14 — head doesn't drift mid-freeze
+- F15 — `[gauge]` dump shows female gauge **completely flat** during freeze (and `[gauge] m=` for male too)
+
+If those are confirmed, we move on to leads A / C / E above. If any of them regressed or only partially fixed, we triage those first before adding new patches on top.
 
 ### What we should NOT do (verified anti-patterns)
 
