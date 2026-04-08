@@ -177,5 +177,38 @@ namespace KK_ZaWarudo
             if (Frozen()) { __result = true; return false; }
             return true;
         }
+
+        /// <summary>
+        /// Freeze the SIMULATION (not just the visuals). HSonyu/HHoushi/HAibu.Proc
+        /// runs every frame, recomputes flags.speedCalc from Time.deltaTime, and
+        /// calls flags.FemaleGaugeUp / MaleGaugeUp to tick the pleasure gauge.
+        /// Setting speedCalc=0 once at freeze is futile because the next frame
+        /// overwrites it.
+        ///
+        /// Playtest evidence (gauge dump from current build):
+        ///   step2 speedCalc 0.45 -> 0  gaugeFemale=35.0  ← we set 0
+        ///   [gauge] f=36.3  speedCalc=0.49  frozen=True  ← 1s later, both grew
+        ///   ... continues to climb to 99.0 over 17 seconds while frozen ...
+        ///
+        /// Fix: prefix-skip both gauge updaters when frozen. Simulation still ticks
+        /// (state machines run, animator advances when unfrozen) but the gauge value
+        /// stays put. Resume() then injects the explicit Accumulated/Instant delta
+        /// directly, which is exactly the v0.1 spec promise.
+        /// </summary>
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(HFlag), nameof(HFlag.FemaleGaugeUp))]
+        public static bool FemaleGaugeUpPre()
+        {
+            if (Frozen()) return false;
+            return true;
+        }
+
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(HFlag), nameof(HFlag.MaleGaugeUp))]
+        public static bool MaleGaugeUpPre()
+        {
+            if (Frozen()) return false;
+            return true;
+        }
     }
 }

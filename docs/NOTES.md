@@ -162,7 +162,21 @@ Recorded from a tester. Status updated as items get addressed.
 
   Need to discuss with user before implementing. **For now this is a known limitation: in free H the player should unfreeze to interact with the UI, then refreeze.**
 
-  Sub-issue: user reports `Accumulation Rate` config "seems to affect non-frozen time as well". This shouldn't be happening — `InjectGauge()` is only called in `Resume()`. Added a 1Hz gauge dump in `Plugin.Update` (`Plugin.GaugeDumpEnabled = true` constant, log lines tagged `[gauge]`) so playtest can confirm: gauge progression should look monotonic and game-driven while NOT frozen, with one discrete jump at each Resume. Any other shape = real bug.
+  Sub-issue: user reports `Accumulation Rate` config "seems to affect non-frozen time as well". ✅ **Real bug found and patched.** Playtest gauge dump:
+  ```
+  step2 speedCalc 0.45 -> 0  gaugeFemale=35.0   ← we set 0
+  [gauge] f=36.3  speedCalc=0.49  frozen=True   ← 1s later, both grew
+  [gauge] f=99.0  speedCalc=1.00  frozen=True   ← 17s later, gauge fully climbed during freeze
+  ```
+  Root cause: `flags.speedCalc = 0` in step2 is overwritten by `HFlag.WaitSpeedProc`, which `HSonyu/HHoushi/HAibu.Proc` calls every frame from Time.deltaTime. The whole simulation backend keeps running during freeze — only the visuals (animator.speed=0), voice (prefix-skip), and face/eye/SE were stopped in v0.1. The gauge tick wasn't.
+
+  Fix: Harmony prefix on `HFlag.FemaleGaugeUp` and `HFlag.MaleGaugeUp` returning false when frozen. Resume's `InjectGauge` writes `flags.gaugeFemale` directly, so it bypasses our prefix and works as before. Result: gauge stays put during freeze; user-perceived "AccumulationRate leak" was actually the natural in-freeze tick + accumulated injection stacking.
+
+---
+
+- **F11 — Grabbing the breast during freeze can't be released.** 🔍 **Same root as F10 main.** Playtest report: tester grabbed the breast while frozen, couldn't let go. Log evidence: `during loop START (player active)` fires once and never `STOP` for the entire freeze duration → `HandCtrl.IsItemTouch()` stays true forever.
+  Likely cause: `HandCtrl.SetIconTexture` (the cursor-area judge that decides which body region the click hits) reads `nowMES.isTouchAreas[]`, which is set from animation events on the current animator state. With `animBody.speed = 0`, no new animation events fire → `isTouchAreas` stays frozen at whatever value it had at freeze time → the click→DetachItem release path either never identifies a "different area" (needed to release the current grab), or the release transition needs an animator state change that never happens. Same fundamental issue as F10 main: HSprite/HandCtrl state machines depend on the animator state advancing.
+  Workaround for tester: unfreeze (T), release the grab normally, refreeze.
 
 ---
 
