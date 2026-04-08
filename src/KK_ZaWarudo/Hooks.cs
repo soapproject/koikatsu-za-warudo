@@ -132,15 +132,20 @@ namespace KK_ZaWarudo
             return true;
         }
 
+        // (Previous NeckLookControllerVer2.LateUpdate prefix patch removed —
+        // we now flip the per-instance neckLookScript.skipCalc flag inside
+        // TimeStopController.FreezeNeckLook(), which is the in-game way.
+        // See call sites at line 61642 of decompiled assembly.)
+
         /// <summary>
-        /// Head turn driver. NeckLookControllerVer2 is a separate MonoBehaviour
-        /// that runs LateUpdate every frame and rewrites bone rotations directly,
-        /// independent of HMotionEyeNeck.Proc. We have to skip this too or the
-        /// female keeps tracking the camera with her head while frozen (F1).
+        /// Eye tracking driver. EyeLookController.LateUpdate aims the iris/pupil
+        /// at the look target every frame, independent of NeckLookControllerVer2.
+        /// Without this prefix the female's eyes track the camera while her head
+        /// stays frozen (F12 / Issue 2 in v0.1 playtest round 2).
         /// </summary>
         [HarmonyPrefix]
-        [HarmonyPatch(typeof(NeckLookControllerVer2), "LateUpdate")]
-        public static bool NeckLookLateUpdatePre()
+        [HarmonyPatch(typeof(EyeLookController), "LateUpdate")]
+        public static bool EyeLookLateUpdatePre()
         {
             if (Frozen()) return false;
             return true;

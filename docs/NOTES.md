@@ -4,22 +4,37 @@ Pitfalls hit during development, risks found in audits, playtest feedback, and u
 
 ---
 
-## Status overview (v0.1 playtest feedback)
+## Status overview
+
+### Round 1 (initial v0.1 playtest)
 
 | ID | Issue | Status |
 |---|---|---|
-| F1  | Head tracking + auto-blink active during freeze | ✅ Fixed |
+| F1  | Head tracking + auto-blink active during freeze | ✅ Fixed (round-1 build verified) |
 | F2  | Game audio leaks during freeze | ✅ Fixed (nuclear AudioListener.pause) |
 | F3  | Resume scream: no mouth movement / no subtitles / single line | ⏳ Deferred to v0.2 |
 | F4  | UI input queued during ~16 s post-resume audio window | 🔍 Patch ready (next round) |
-| F5  | Boop plugin doesn't work during freeze | ✅ Auto-fixed by F7 (verify) |
+| F5  | Boop plugin doesn't work during freeze | ✅ Fixed (auto-fixed by F7) |
 | F6  | Touching the female changes her expression during freeze | 🔍 Patch ready (next round) |
 | F7  | Hair / skirt physics turn off when frozen | ✅ Fixed |
 | F8  | In-progress ahegao reverts to default on freeze | ✅ Fixed |
 | F9  | Fluid particles hang in mid-air during freeze | ✅ Fixed (emission off, not Pause) |
 | F10 main | Free H HSprite UI clicks blocked during freeze | ⏸ Deferred — needs design rethink |
-| F10 sub  | Gauge climbs during freeze ("Accumulation Rate leak") | ✅ Fixed (real bug — `HFlag.FemaleGaugeUp` prefix-skip) |
+| F10 sub  | Gauge climbs during freeze ("Accumulation Rate leak") | ✅ Fixed (round-1 build) |
 | F11 | Grabbing the breast during freeze can't be released | ⏸ Same root as F10 main |
+
+### Round 2 (after first fixes shipped)
+
+| ID | Issue | Status |
+|---|---|---|
+| F12 | Eye tracking remains enabled while head is frozen | ✅ Fixed (`EyeLookController.LateUpdate` prefix) |
+| F13 | Freezing snaps the female head into a default pose | ✅ Fixed (per-instance `neckLookScript.skipCalc` + head bone localRotation pin via LateUpdate) |
+| F14 | Head sometimes still moves on its own mid-freeze (animation-state dependent) | 🔍 Likely fixed by F13 (LateUpdate re-pin) — verify |
+| F15 | Female gauge sometimes still ticks in increments during freeze | ✅ Belt-and-braces: now also sets `flags.lockGugeFemale = true` (paired with the existing `HFlag.FemaleGaugeUp` prefix). Same for male. |
+| F16 | Free H control: speed/auto/position works in some animation states but not others (insertion / pulling out / orgasm) | ⏸ Same root as F10 main, with state-dependence detail |
+| F17 | Groping animations pause along with female animations (player hand grip animation lives on the same animator) | ⏸ Architectural — fundamentally tied to `animBody.speed=0` |
+| F18 | Male orgasm starts during freeze, never finishes, plays no sound; female orgasm prevents action selection | ⏸ Same root as F10 main + F15 (gauge that already crossed threshold before freeze) |
+| F19 | Tabbing in/out makes menus disappear | ❓ Probably not us — Unity focus loss issue, needs repro |
 
 Bug fixes from earlier audits (B-series) are below the F-series.
 
@@ -112,6 +127,61 @@ Same root as F10 main. Log evidence: `during loop START (player active)` fires o
 Likely cause: `HandCtrl.SetIconTexture` (the cursor-area judge that decides which body region the click hits) reads `nowMES.isTouchAreas[]`, which is set from animation events on the current animator state. With `animBody.speed = 0`, no new animation events fire → `isTouchAreas` stays frozen at whatever value it had at freeze time → the click→DetachItem release path either never identifies a "different area" (needed to release the current grab), or the release transition needs an animator state change that never happens. Same fundamental issue as F10 main.
 
 Workaround for tester: unfreeze (T), release the grab normally, refreeze.
+
+### F12 — Eye tracking remained on while head was frozen ✅
+The round-1 head fix patched `NeckLookControllerVer2.LateUpdate` (head turn) and `ChangeEyesBlinkFlag(false)` (auto-blink), but eye iris/pupil aim is driven by a third component: `EyeLookController.LateUpdate`. Now Harmony-prefix-skipped while frozen.
+
+### F13 — Freezing snaps the head to a default pose ✅
+Round 1 used a type-level Harmony prefix on `NeckLookControllerVer2.LateUpdate` returning false. With LateUpdate skipped, the bone's rotation source disappeared and (apparently) reverted to its parent's default — head snapped to whatever the rest pose was at freeze time.
+
+Fix: switched to the in-game `neckLookScript.skipCalc = true` flag (KK uses this internally; see decompiled assembly line 61642). Cached + restored per character. Plus we snapshot the head bone `localRotation` at freeze and re-pin it in `Plugin.LateUpdate` every frame so any residual writer (IK, constraint, layered animator) gets immediately reverted.
+
+This also resolves R8 (the type-level patch was affecting all characters including the protagonist) — `skipCalc` is per-instance.
+
+### F14 — "Head sometimes moves on its own" mid-freeze 🔍
+Likely fixed by F13's LateUpdate re-pin. The previous round only stopped the calculation but didn't pin the result, so any other LateUpdate writer (or animator residue) could push the bone. Verify in next playtest.
+
+### F15 — Female gauge "sometimes still ticks in increments" during freeze ✅ (belt-and-braces)
+Round 1 fixed the steady-state climb by Harmony-prefixing `HFlag.FemaleGaugeUp` and `HFlag.MaleGaugeUp`. Round 2 reports the gauge **occasionally** still bumps. Possible escapes our prefix doesn't catch:
+- Direct `flags.gaugeFemale = X` writes elsewhere in the simulation
+- `_force=true` calls to `FemaleGaugeUp` (the method itself bypasses `lockGugeFemale` when `_force` is set, but our prefix returns false unconditionally so this ISN'T the leak)
+
+Belt-and-braces fix: in addition to the prefix, also set `flags.lockGugeFemale = true` and `flags.lockGugeMale = true` on freeze (cached + restored on resume). This makes any code path that respects the lock skip the increment. Resume's `InjectGauge` writes the field directly so the lock doesn't block the explicit injection.
+
+If gauge bumps still happen after this round, the next step is to grep the assembly for direct `gaugeFemale =` writes and either patch them or transpile-skip.
+
+### F16 — Free H speed/auto/position works in *some* animation states but not others ⏸
+More precise version of F10 main. The user reports control works in some animations but not insertion / pulling out / orgasm. This makes sense given the root cause: the state machine waits on `voiceWait` clearing, which depends on the animator state name reaching `Idle`/`Stop_Idle`. Animations that happen to be paused at-or-near those states allow clicks; animations paused mid-loop (insertion, climax) don't.
+
+Same architectural deferral as F10 main.
+
+### F17 — Groping animations pause along with the female ⏸
+The player's hand-grip / groping animation is part of the same `animBody` Animator hierarchy as the female (or shares the same Animator state machine for the H position). Setting `animBody.speed = 0` freezes both. This is why F11 (can't release grab) happens — the hand grip animation can't transition to "release".
+
+Architectural — fundamentally tied to the freeze approach. The "cache and reapply bone positions" alternative mentioned in F10 main solutions would also fix F17 because the player's hand wouldn't be on a frozen animator. Same design rethink applies.
+
+### F18 — Male orgasm starts during freeze, never finishes, plays no sound 🔥
+Highest user-reported severity. Two compounding causes:
+1. **Female gauge maxing fast in the round-1 build** (because `FemaleGaugeUp` prefix-skip didn't catch every code path) — F15 belt-and-braces fix should now actually keep it pegged.
+2. **Once orgasm state triggers**, the orgasm voice/animation requires the animator state machine to advance through the orgasm sequence to clear `flags.finish`. With the animator frozen, the orgasm never completes → all action selection is blocked because `flags.click` queue assumes orgasm sequence completion before any new click is accepted.
+
+Round-2 mitigations:
+- F15 (gauge lock + prefix) should prevent freeze from triggering orgasm in the first place if gauge wasn't already there.
+- If user freezes AFTER gauge is already at orgasm threshold, the architectural F10 main / F17 issue means the orgasm sequence can't complete anyway → user still stuck. Workaround: don't freeze near the orgasm threshold, or unfreeze and let it play through.
+
+### F19 — Tabbing in/out makes menus disappear ❓
+Almost certainly not caused by us. Unity focus-loss behavior, probably interaction with another plugin or game itself. Worth verifying with our plugin disabled.
+
+---
+
+## Note about config visibility (round-2 user reported "no new configs in options")
+
+If after a fresh build you don't see `Audio > Play During Loop` and `Audio > During Loop Only While Active` in ConfigurationManager:
+
+1. **Verify the dll mtime** in `BepInEx/plugins/my/KK_ZaWarudo.dll` is newer than the build you suspect. Stale dll = stale config schema.
+2. **Restart the game completely** (not just F5 in ConfigurationManager). New config bindings only register on `Plugin.Awake`.
+3. Open ConfigurationManager (default F1) → expand `KK_ZaWarudo` → `Audio` section.
+4. If still missing, grep `BepInEx/LogOutput.log` for `ZAWA> KK_ZaWarudo` to confirm the plugin actually loaded with the expected version string.
 
 ---
 

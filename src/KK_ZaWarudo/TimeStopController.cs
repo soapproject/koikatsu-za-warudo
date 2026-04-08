@@ -93,12 +93,23 @@ namespace KK_ZaWarudo
         private readonly Dictionary<ParticleSystem, bool> _suppressedEmission = new Dictionary<ParticleSystem, bool>();
         private readonly HashSet<AudioSource> _pausedAudio = new HashSet<AudioSource>();
         private readonly Dictionary<ChaControl, bool> _savedBlinkFlags = new Dictionary<ChaControl, bool>();
+        // Issue 1+5: snapshot per-character neck-look state and head bone rotation,
+        // restore on resume. Using neckLookScript.skipCalc (the in-game flag) plus
+        // a Transform localRotation snapshot prevents the head snapping to a default
+        // pose at the moment of freeze, and stops "head moves on its own" mid-freeze.
+        private readonly Dictionary<NeckLookCalcVer2, bool> _savedSkipCalc = new Dictionary<NeckLookCalcVer2, bool>();
+        private readonly Dictionary<Transform, Quaternion> _pinnedHeadRots = new Dictionary<Transform, Quaternion>();
         // F8: capture in-progress face per character on freeze and re-apply every
         // ReapplyIfFrozen call so an in-progress ahegao isn't reverted to default.
         private struct FaceState { public int eyes; public int mouth; public int eyebrow; public byte tears; public float eyesOpen; }
         private readonly Dictionary<ChaControl, FaceState> _savedFaces = new Dictionary<ChaControl, FaceState>();
         private float _savedSpeedCalc;
         private bool _savedAudioListenerPause;
+        // Belt-and-braces gauge lock (paired with HFlag.FemaleGaugeUp/MaleGaugeUp prefix).
+        // FemaleGaugeUp early-returns if lockGugeFemale is true (and the caller isn't
+        // forcing). InjectGauge writes gaugeFemale directly so it bypasses this lock.
+        private bool _savedLockFemale;
+        private bool _savedLockMale;
 
         public static void Bind(MonoBehaviour proc, List<ChaControl> females, ChaControl male, List<ChaControl> extraMales, HFlag flags, HandCtrl hand0 = null, HandCtrl hand1 = null)
         {
@@ -168,12 +179,16 @@ namespace KK_ZaWarudo
             FreezeFemaleAnimators();
             Plugin.LogI($"  step1 animators cached={_animSpeeds.Count}");
 
-            // 2. HFlag.speedCalc
+            // 2. HFlag.speedCalc + gauge locks (belt-and-braces with the GaugeUp prefixes)
             if (_flags != null)
             {
                 _savedSpeedCalc = _flags.speedCalc;
                 _flags.speedCalc = 0f;
-                Plugin.LogI($"  step2 speedCalc {_savedSpeedCalc} -> 0  gaugeFemale={_flags.gaugeFemale:F1}");
+                _savedLockFemale = _flags.lockGugeFemale;
+                _savedLockMale = _flags.lockGugeMale;
+                _flags.lockGugeFemale = true;
+                _flags.lockGugeMale = true;
+                Plugin.LogI($"  step2 speedCalc {_savedSpeedCalc} -> 0  gaugeFemale={_flags.gaugeFemale:F1} gaugeMale={_flags.gaugeMale:F1} locks=set");
             }
             else Plugin.LogW("  step2 flags=null, skipped");
 
@@ -204,6 +219,10 @@ namespace KK_ZaWarudo
             // 4e. F1: stop auto-blink on each subject.
             DisableBlink();
             Plugin.LogI($"  step4e blink disabled on {_savedBlinkFlags.Count} subject(s)");
+
+            // 4e2. Issue 1+5: per-character neck-look freeze (skipCalc) + head bone snapshot.
+            FreezeNeckLook();
+            Plugin.LogI($"  step4e2 neck-look frozen on {_savedSkipCalc.Count} subject(s) headPins={_pinnedHeadRots.Count}");
 
             // 4f. F8: snapshot in-progress face so an ahegao isn't lost.
             SnapshotAndPinFace();
@@ -279,6 +298,9 @@ namespace KK_ZaWarudo
             _savedBlinkFlags.Clear();
             Plugin.LogI($"  blink restored on {restoredBlink} subject(s)");
 
+            // Restore neck-look skipCalc (Issue 1+5)
+            RestoreNeckLook();
+
             // Don't restore _savedFaces — let the game take over the face on resume.
             // (If ClimaxFaceOnResume is enabled, ApplyClimaxFace below overrides anyway.)
             _savedFaces.Clear();
@@ -286,7 +308,9 @@ namespace KK_ZaWarudo
             if (_flags != null)
             {
                 _flags.speedCalc = _savedSpeedCalc;
-                Plugin.LogI($"  restored speedCalc={_savedSpeedCalc}");
+                _flags.lockGugeFemale = _savedLockFemale;
+                _flags.lockGugeMale = _savedLockMale;
+                Plugin.LogI($"  restored speedCalc={_savedSpeedCalc} locks=({_savedLockFemale},{_savedLockMale})");
             }
 
             InjectGauge();
@@ -336,6 +360,7 @@ namespace KK_ZaWarudo
             StopFemaleVoices();    // re-stop voice slots — new partner may have new mouth bindings
             FreezeFemaleAudio();   // catches any AudioSource that started playing during the switch
             DisableBlink();        // F1: cover newly-bound subjects
+            FreezeNeckLook();      // Issue 1+5: cover newly-bound subjects' neck/head
             SnapshotAndPinFace();  // F8: re-pin in case the switch reset the face
             if (_flags != null) _flags.speedCalc = 0f;
         }
@@ -398,6 +423,61 @@ namespace KK_ZaWarudo
                 }
             }
             Plugin.LogI($"  step4c subject AudioSources paused={paused} (cumulative cache={_pausedAudio.Count})");
+        }
+
+        /// <summary>
+        /// Issue 1 + 5 (head): stop the neck-look calculation per character via the
+        /// in-game `neckLookScript.skipCalc` flag (KK uses this internally — see
+        /// decompiled line 61642). Also snapshot the current head bone localRotation
+        /// so a parallel coroutine can re-pin it each LateUpdate, in case some
+        /// other system writes to it after we set skipCalc.
+        /// </summary>
+        private void FreezeNeckLook()
+        {
+            foreach (var c in FrozenSubjects())
+            {
+                try
+                {
+                    if (c.neckLookCtrl != null && c.neckLookCtrl.neckLookScript != null)
+                    {
+                        var calc = c.neckLookCtrl.neckLookScript;
+                        if (!_savedSkipCalc.ContainsKey(calc))
+                            _savedSkipCalc[calc] = calc.skipCalc;
+                        calc.skipCalc = true;
+                    }
+                    var head = c.objHeadBone != null ? c.objHeadBone.transform : null;
+                    if (head != null && !_pinnedHeadRots.ContainsKey(head))
+                        _pinnedHeadRots[head] = head.localRotation;
+                }
+                catch (System.Exception e) { Plugin.LogW($"  FreezeNeckLook failed on {c.name}: {e.Message}"); }
+            }
+        }
+
+        /// <summary>Restore the cached skipCalc flags and clear the head pin set.</summary>
+        private void RestoreNeckLook()
+        {
+            int restored = 0;
+            foreach (var kv in _savedSkipCalc)
+            {
+                if (kv.Key != null) { kv.Key.skipCalc = kv.Value; restored++; }
+            }
+            _savedSkipCalc.Clear();
+            _pinnedHeadRots.Clear();
+            Plugin.LogI($"  neck-look skipCalc restored on {restored} subject(s)");
+        }
+
+        /// <summary>
+        /// Plugin.LateUpdate calls this every frame while frozen — re-applies the
+        /// snapshotted head localRotation in case any LateUpdate writer overwrote it.
+        /// Cheap (Dictionary iteration) and idempotent.
+        /// </summary>
+        public void PinHeadRotationsLate()
+        {
+            if (!_frozen) return;
+            foreach (var kv in _pinnedHeadRots)
+            {
+                if (kv.Key != null) kv.Key.localRotation = kv.Value;
+            }
         }
 
         /// <summary>

@@ -39,13 +39,14 @@ Frozen subjects = every entry in `lstFemale` plus non-protagonist males (`male1`
 | Step | Target | Action |
 |---|---|---|
 | 1 | Subject `Animator`s | `animBody.speed = 0` and `animTongueEx.speed = 0` (the only two Animators ChaInfo exposes — verified via ilspy) |
-| 2 | `HFlag.speedCalc` | Cached, then set to 0 (the game overwrites this every frame, so it's mostly informational; the real gauge stop is step 6) |
+| 2 | `HFlag.speedCalc` + gauge locks | `speedCalc` cached and set to 0 (game overwrites this every frame, mostly informational). `lockGugeFemale` and `lockGugeMale` cached and set to true as a belt-and-braces partner for the step-6 prefix. |
 | 3 | Subject `DynamicBone` / `DynamicBone_Ver02` | **No-op** (intentional) so hair/cloth keep simulating and gradually drape under gravity instead of locking mid-swing. |
 | 4 | Every `ParticleSystem` under the H-scene root | `EmissionModule.enabled = false` cached + restored — existing particles keep simulating (gravity, lifetime), only new spawns are suppressed. |
 | 4b | Each subject's current mouth voice slot | `Manager.Voice.Instance.Stop(flags.transVoiceMouth[i])` to kill in-flight voice. |
 | 4c | Every `AudioSource` under each subject | `Pause()` cached + restored. Defensive — KK doesn't actually attach voice here, but cheap insurance. |
 | 4d | Global audio | `AudioListener.pause = true`. Mutes the entire game (BGM, ambient, voice, body SE). Plugin SFX bypasses via `ignoreListenerPause = true`. |
 | 4e | Auto-blink | `ChangeEyesBlinkFlag(false)` per subject, cached + restored. Stops `fbsCtrl.BlinkCtrl` from auto-blinking. |
+| 4e2 | Neck-look + head pin | `chaCtrl.neckLookCtrl.neckLookScript.skipCalc = true` per subject (in-game's own "stop calculating" flag, cached + restored). Plus snapshot the head bone localRotation so `Plugin.LateUpdate` can re-pin it every frame, defeating any residual writer that would otherwise let the head drift. |
 | 4f | In-progress face | Snapshot `eyesPtn` / `mouthPtn` / `eyebrowPtn` / `tearsLv` / `eyesOpenMax` per subject. Re-applied on `ReapplyIfFrozen` so an in-progress ahegao isn't reverted. |
 | 5 | Custom audio | Trigger the Freeze SFX coroutine (Enter → During loop). |
 | 6 | Pleasure gauge tick | Harmony **prefix** on `HFlag.FemaleGaugeUp` and `HFlag.MaleGaugeUp` returns false while frozen, so the simulation backend's per-frame gauge increments are blocked. Resume's `InjectGauge` writes `gaugeFemale` directly and bypasses the prefix. |
@@ -57,7 +58,7 @@ In addition to the per-step state, the following **Harmony prefixes** are active
 | `HVoiceCtrl.VoiceProc` / `BreathProc` | Block new voice / breath being queued. |
 | `HMotionEyeNeckFemale.Proc` / `HMotionEyeNeckMale.Proc` | Block per-frame writes to eye/neck/face/eyebrow/tears patterns. |
 | `HSeCtrl.Proc` | Block slap / body-contact SE. |
-| `NeckLookControllerVer2.LateUpdate` | Block direct head-rotation writes (head turn tracking the camera, independent of `HMotionEyeNeck.Proc`). |
+| `EyeLookController.LateUpdate` | Block iris/pupil tracking the camera (separate component from `HMotionEyeNeck.Proc` and from neck rotation). |
 | `HFlag.FemaleGaugeUp` / `MaleGaugeUp` | Block gauge increments from the still-running simulation backend. |
 | `HSceneProc.ChangeAnimator` (postfix) | Re-pin freeze on partner / position switch. |
 | `VRHScene.ChangeAnimator` (postfix, conditional) | Same, on VR builds. Patched via reflection at plugin load — absent on non-VR. |
@@ -172,6 +173,6 @@ A 1 Hz `[gauge]` dump (toggleable via `Plugin.GaugeDumpEnabled`) prints `f=… m
 | `HMotionEyeNeckFemale.Proc` | prefix | Freeze per-frame female eye/neck/face/eyebrow/tears (also held during resume SFX when `Climax Face On Resume`) |
 | `HMotionEyeNeckMale.Proc` | prefix | Same for male slots |
 | `HSeCtrl.Proc` | prefix | Block per-frame slap / body-contact SE |
-| `NeckLookControllerVer2.LateUpdate` | prefix | Block per-instance head rotation writes (independent of `HMotionEyeNeck.Proc`) |
+| `EyeLookController.LateUpdate` | prefix | Block iris/pupil camera tracking |
 | `HFlag.FemaleGaugeUp` | prefix | Block per-frame gauge tick from the still-running simulation backend |
 | `HFlag.MaleGaugeUp` | prefix | Same for the male gauge |
