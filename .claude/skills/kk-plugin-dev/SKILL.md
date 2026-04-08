@@ -229,15 +229,49 @@ This is what the game itself uses internally — see decompiled assembly line ~6
 
 If a per-frame writer (animator residue, IK, constraint) keeps overwriting the head rotation despite `skipCalc=true`, snapshot `objHeadBone.transform.localRotation` and re-apply it from `Plugin.LateUpdate` every frame.
 
-### `HandCtrl` activity signals
+### `HandCtrl` — grab pipeline + activity signals
+
+The hand-grab system has THREE entry points and they have very different gating:
+
+| Method | Called from | Runs in freeze? | What it does |
+|---|---|---|---|
+| `HandCtrl.Update()` | Unity | yes | Tiny — only updates silhouette + blend |
+| `HandCtrl.Proc(bool)` | `HSonyu/HHoushi/HAibu.Proc()` (per frame) | yes | Handles hover detection (icon) and click registration **only when `action == HandAction.none`** |
+| `HandCtrl.LateProc()` | `HSonyu.LateProc()` → `HSceneProc.LateUpdate()` (per frame) | yes (until we patch) | Dispatches to `JudgeProc` / `ActionProc` based on `action` state. **This is where the grab pipeline actually runs.** |
+
+**Critical fact (F11 root cause)**: when the player is in a click-grab, `ActionProc` → `ClickAction` runs every frame, and the click→drag→release transition is gated on:
+```csharp
+// HandCtrl.cs ~line 147570
+if (female.getAnimatorStateInfo(nLayer).normalizedTime >= 1f) {
+    ctrl = Ctrl.drag;   // ← release path goes through drag
+    ...
+}
+```
+The female's touch animation must reach `normalizedTime >= 1f` (one complete loop) for the state to advance. If `animBody.speed = 0`, it never does, and the grab gets **permanently stuck** because the only paths that reset `action = HandAction.none` are:
+- `FinishAction()` — only called from `useItems[i] == null` branch
+- `ForceFinish()` — only called from `DragAction` mouse-up handler (and we never reach DragAction)
+
+**Escape API**: `HandCtrl.ForceFinish()` (line 148075) is KK's own emergency-stop. Resets `action=none`, clears `useItems[]`, stops contact SE. Safe to call externally.
 
 ```csharp
 public bool IsItemTouch();      // ~146382 — true if any hand item slot is currently grabbing
 public bool IsAction();         // ~146440 — true if action == HandAction.action
 public bool IsKissAction();
+public bool ForceFinish(bool _isCameraMoveStop = true);   // ~148075 — emergency release
+public HandAction action;       // current state (none/judge/action)
+
+public enum HandAction { none, judge, action }
 ```
 
-Used for "is the player actively interacting" gating. Caveat: once a touch starts, `IsItemTouch()` stays true until the player releases — and during freeze the release path may be blocked (see F11 in NOTES).
+**Current freeze pattern (Trick A — verified offline, awaiting playtest)**:
+1. `ForceFinish()` on every hand on Freeze entry — clean slate.
+2. Harmony **postfix** on `HandCtrl.ClickAction` that, when frozen, teleports the touch action layer's `normalizedTime` to 1 via `female.animBody.Play(info.fullPathHash, nLayer, 1f)`.
+3. The next `ClickAction` invocation sees the gate `if (info.normalizedTime >= 1f)` pass, transitions to drag mode normally.
+4. Mouse-up triggers `DragAction → ForceFinish` via the unmodified KK release path.
+
+**Why this works without un-freezing the body**: `ChaControl.setAllLayerWeight` iterates `for (int i = 1; i < animBody.layerCount; i++)` — confirming layer 0 is the master body pose and layers 1+ are overlays. `nLayer` (`= layer.layerActions[1].back.body` or `.front.body`) is one of the overlay layers, **never zero**. Calling `Animator.Play(stateHash, nLayer, 1f)` repositions ONLY that overlay layer; the master body (layer 0) stays frozen at its `animBody.speed = 0` state.
+
+If Trick A turns out to fail in playtest (e.g. layer turns out to be 0 in some edge case, or `Animator.Play` doesn't behave as expected with a paused animator), the `nLayer <= 0` guard in the postfix prevents touching layer 0, and the worst case is the click stays stuck (existing F11 behavior, no regression).
 
 ### Other useful subsystems
 

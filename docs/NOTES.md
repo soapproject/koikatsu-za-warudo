@@ -21,7 +21,7 @@ Pitfalls hit during development, risks found in audits, playtest feedback, and u
 | F9  | Fluid particles hang in mid-air during freeze | ✅ Fixed (emission off, not Pause) |
 | F10 main | Free H HSprite UI clicks blocked during freeze | ⏸ Deferred — needs design rethink |
 | F10 sub  | Gauge climbs during freeze ("Accumulation Rate leak") | ✅ Fixed (round-1 build) |
-| F11 | Grabbing the breast during freeze can't be released | ⏸ Same root as F10 main |
+| F11 | Grabbing the breast during freeze can't be released | 🔬 **Trick A shipped, needs playtest** — postfix on `HandCtrl.ClickAction` teleports the touch action layer's `normalizedTime` to 1 each frame (via `animBody.Play(stateHash, nLayer, 1f)`), letting the click→drag transition gate trip naturally. Mouse-up then runs through KK's own `ForceFinish` release path. Layer 0 is untouched so the body pose stays frozen. Plus `ForceFinish()` on Freeze entry to clean up any pre-existing grab. |
 
 ### Round 2 (after first fixes shipped)
 
@@ -37,6 +37,7 @@ Pitfalls hit during development, risks found in audits, playtest feedback, and u
 | F19 | Tabbing in/out makes menus disappear | ❓ Probably not us — Unity focus loss issue, needs repro |
 | F20 | Speed/auto/alternate UI works in free H **only if auto mode was enabled before freeze** | ⏸ Same root as F10 main, key insight noted |
 | F21 | Right-click alternate position: male moves to new position, female doesn't | ✅ Animator transition window — `ReapplyIfFrozen` now lets female animator run briefly (poll until target state has actually started, bound by 1s timeout) before re-pinning. Other locks stay engaged through the window. (verify) |
+| F22 | Can't grab / touch the female during freeze | 🔬 Same fix as F11 (Trick A — teleport action layer normalizedTime). Verify in playtest: clicking on body during freeze should grab + visually react without getting stuck, and mouse-up should release. |
 
 Bug fixes from earlier audits (B-series) are below the F-series.
 
@@ -123,12 +124,43 @@ Root cause: `flags.speedCalc = 0` in step 2 is overwritten by `HFlag.WaitSpeedPr
 
 Fix: Harmony prefix on `HFlag.FemaleGaugeUp` and `HFlag.MaleGaugeUp` returning false when frozen. Resume's `InjectGauge` writes `flags.gaugeFemale` directly, so it bypasses our prefix and works as before. Result: gauge stays put during freeze; user-perceived "AccumulationRate leak" was actually the natural in-freeze tick + accumulated injection stacking.
 
-### F11 — Grabbing the breast during freeze can't be released ⏸
-Same root as F10 main. Log evidence: `during loop START (player active)` fires once and never `STOP` for the entire freeze duration → `HandCtrl.IsItemTouch()` stays true forever.
+### F11 — Grabbing the breast during freeze can't be released ✅
+**Round 1 misdiagnosed this as "same root as F10 main".** Round-3 ilspy trace through `HandCtrl.LateProc → ActionProc → ClickAction` (HandCtrl.cs line 147505) found a different actual root cause:
 
-Likely cause: `HandCtrl.SetIconTexture` (the cursor-area judge that decides which body region the click hits) reads `nowMES.isTouchAreas[]`, which is set from animation events on the current animator state. With `animBody.speed = 0`, no new animation events fire → `isTouchAreas` stays frozen at whatever value it had at freeze time → the click→DetachItem release path either never identifies a "different area" (needed to release the current grab), or the release transition needs an animator state change that never happens. Same fundamental issue as F10 main.
+```csharp
+// HandCtrl.ClickAction, line ~147570
+if (female.getAnimatorStateInfo(nLayer).normalizedTime >= 1f)
+{
+    // transition to drag mode OR process oneMoreLoop
+    ctrl = Ctrl.drag;
+    ...
+}
+```
 
-Workaround for tester: unfreeze (T), release the grab normally, refreeze.
+The grab pipeline is `click → click-loop → drag → mouse-up → ForceFinish → action=none`. The transition from `click` to `drag` is **gated on the female's touch animation reaching `normalizedTime >= 1f`** (a complete loop). With `animBody.speed = 0`, the touch animation stays at `normalizedTime = 0` forever, so the click→drag transition never happens. And the only places that reset `action = HandAction.none` are:
+- `FinishAction()` — only called from a `useItems[i] == null` branch we never enter (our useItem still exists)
+- `ForceFinish()` — only called from `DragAction` when mouse button is up, but we're stuck in `ClickAction`, never reach `DragAction`
+
+So the grab was stuck not because of voiceWait or the area judge, but because the **click animation loop is the prerequisite for the drag-mode transition that allows release**.
+
+**Fix**:
+1. **`ForceFinish()` on Freeze entry** — KK's own emergency-stop API (HandCtrl.cs:148075) cleanly resets `action=none`, clears `useItems[]`, stops contact SE. We call it for any hand with `action != none`.
+2. **Prefix-skip `HandCtrl.LateProc` while frozen** — blocks `ActionProc` / `JudgeProc` dispatch entirely so no new grab can enter the click pipeline.
+
+Combined: at freeze time any in-progress grab is cleanly released, and during freeze no new grab is possible.
+
+**Side effect**: F22 below — the user loses the ability to grab/touch during freeze. Tracked separately as a wish.
+
+### F22 — Can't grab / touch the female during freeze ⏸
+Side-effect of the F11 fix. The user wants to be able to grab/touch during the freeze (the "frozen world but I can still interact" fantasy).
+
+**Why it's hard**: the F11 root cause is that `HandCtrl.ClickAction` requires the female's touch animation to play one complete loop (`normalizedTime >= 1f`) before the click→drag transition happens. We freeze `animBody.speed = 0`, so any loop never completes. To make grabbing work during freeze we'd need one of:
+
+1. **Briefly un-freeze animator while a click-grab is in progress** — similar mechanism to the F21 transition window for `ChangeAnimator`, but applied to hand grab instead. Pain point: hand grabs are continuous (the player holds a click for some time), so the un-freeze window would need to last as long as the grab, which essentially means "not frozen while grabbing" — kills the visual freeze.
+2. **Transpile `HandCtrl.ClickAction`** to skip the `normalizedTime >= 1f` gate when our plugin is frozen. Cheap but very fragile and version-specific.
+3. **Reimplement the grab pipeline ourselves** — bypass HandCtrl entirely, drive bone positions from mouse delta directly. Heavy.
+
+Likely v0.2 work. Possibly tied together with F10 main / F16 / F17 architectural rethink.
 
 ### F12 — Eye tracking remained on while head was frozen ✅
 The round-1 head fix patched `NeckLookControllerVer2.LateUpdate` (head turn) and `ChangeEyesBlinkFlag(false)` (auto-blink), but eye iris/pupil aim is driven by a third component: `EyeLookController.LateUpdate`. Now Harmony-prefix-skipped while frozen.

@@ -46,6 +46,7 @@ Frozen subjects = every entry in `lstFemale` plus non-protagonist males (`male1`
 | 4c | Every `AudioSource` under each subject | `Pause()` cached + restored. Defensive — KK doesn't actually attach voice here, but cheap insurance. |
 | 4d | Global audio | `AudioListener.pause = true`. Mutes the entire game (BGM, ambient, voice, body SE). Plugin SFX bypasses via `ignoreListenerPause = true`. |
 | 4e | Auto-blink | `ChangeEyesBlinkFlag(false)` per subject, cached + restored. Stops `fbsCtrl.BlinkCtrl` from auto-blinking. |
+| 4e1 | Active hand grabs (F11) | `_hand0.ForceFinish()` / `_hand1.ForceFinish()` if `action != HandAction.none`. Cleanly releases any in-progress click-grab before we freeze the animator — without this, the grab gets stuck because `ClickAction` (HandCtrl.cs:147570) waits for the touch-animation loop to reach `normalizedTime >= 1f` to transition out of the click state, which never happens with `animBody.speed = 0`. Combined with the `HandCtrl.LateProc` prefix-skip below, this means no grab can be in-flight during freeze. |
 | 4e2 | Neck-look + head pin | `chaCtrl.neckLookCtrl.neckLookScript.skipCalc = true` per subject (in-game's own "stop calculating" flag, cached + restored). Plus snapshot the head bone localRotation so `Plugin.LateUpdate` can re-pin it every frame, defeating any residual writer that would otherwise let the head drift. |
 | 4f | In-progress face | Snapshot `eyesPtn` / `mouthPtn` / `eyebrowPtn` / `tearsLv` / `eyesOpenMax` per subject. Re-applied on `ReapplyIfFrozen` so an in-progress ahegao isn't reverted. |
 | 5 | Custom audio | Trigger the Freeze SFX coroutine (Enter → During loop). |
@@ -59,6 +60,7 @@ In addition to the per-step state, the following **Harmony prefixes** are active
 | `HMotionEyeNeckFemale.Proc` / `HMotionEyeNeckMale.Proc` | Block per-frame writes to eye/neck/face/eyebrow/tears patterns. |
 | `HSeCtrl.Proc` | Block slap / body-contact SE. |
 | `EyeLookController.LateUpdate` | Block iris/pupil tracking the camera (separate component from `HMotionEyeNeck.Proc` and from neck rotation). |
+| `HandCtrl.ClickAction` (postfix) | F11/F22 Trick A: while frozen, postfix teleports the touch action layer's state to `normalizedTime = 1f` via `animBody.Play(stateHash, nLayer, 1f)`. This makes ClickAction's gate `if (info.normalizedTime >= 1f)` trip on the next call → click→drag transition runs naturally → mouse-up triggers `ForceFinish` → grab releases. Layer 0 (master body) is unaffected because the touch layer is a separate Animator layer (verified via `setAllLayerWeight` skipping layer 0). |
 | `HFlag.FemaleGaugeUp` / `MaleGaugeUp` | Block gauge increments from the still-running simulation backend. |
 | `HSceneProc.ChangeAnimator` (postfix) | Re-pin freeze on partner / position switch. |
 | `VRHScene.ChangeAnimator` (postfix, conditional) | Same, on VR builds. Patched via reflection at plugin load — absent on non-VR. |
@@ -87,7 +89,8 @@ In order:
 | General | Unblock Orgasm Key | KeyboardShortcut | `U` | F18 escape hatch — when frozen mid-orgasm, spoofs voice slots and reflectively invokes the active `HActionBase.LoopProc(true)` twice to advance the state machine through the orgasm sequence |
 | General | Toggle Cooldown | float (0–5) | `0.3` | Minimum seconds between toggles. Prevents SFX chopping and gauge spam from rapid presses. |
 | General | Resume Mode | enum {Instant, Accumulated} | `Accumulated` | How gauge is injected on resume |
-| General | Accumulation Rate | float (0–100) | `10.0` | Gauge points per frozen second (Accumulated only) |
+| General | Accumulation Rate | float (0–100) | `2.0` | Gauge points per frozen second (Accumulated only). 10s freeze × 2 = +20 gauge. |
+| General | Accumulation Cap | float (0–100) | `65.0` | Hard ceiling for the gauge value Resume can inject up to. Defaults to 65 — just below the 70 orgasm threshold — so a long freeze can't accidentally trigger orgasm on resume. The cap never pulls gauge DOWN if already above. Set to 100 to disable. |
 | Advanced | Animator Transition Window | bool | `true` | F21 fix — let the female animator run briefly during `ChangeAnimator` so the new position can start playing before we re-pin |
 | Advanced | Animator Transition Timeout | float (0.1–5) | `1.0` | Max seconds to wait for the new animator state to settle |
 | Climax Face | Enable | bool | `false` | Force a climax face on each female on resume, held for the duration of the resume SFX |
@@ -177,5 +180,6 @@ A 1 Hz `[gauge]` dump (toggleable via `Plugin.GaugeDumpEnabled`) prints `f=… m
 | `HMotionEyeNeckMale.Proc` | prefix | Same for male slots |
 | `HSeCtrl.Proc` | prefix | Block per-frame slap / body-contact SE |
 | `EyeLookController.LateUpdate` | prefix | Block iris/pupil camera tracking |
+| `HandCtrl.ClickAction` | postfix | Trick A — teleport touch action layer's normalizedTime to 1 so the click→drag→ForceFinish release path completes during freeze (F11/F22) |
 | `HFlag.FemaleGaugeUp` | prefix | Block per-frame gauge tick from the still-running simulation backend |
 | `HFlag.MaleGaugeUp` | prefix | Same for the male gauge |

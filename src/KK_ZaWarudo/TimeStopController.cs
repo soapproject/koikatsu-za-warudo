@@ -324,6 +324,15 @@ namespace KK_ZaWarudo
             DisableBlink();
             Plugin.LogI($"  step4e blink disabled on {_savedBlinkFlags.Count} subject(s)");
 
+            // 4e1. F11: cleanly release any active hand grab BEFORE freezing the
+            // animator. Without this, an in-progress click-grab gets stuck because
+            // ClickAction (HandCtrl.cs:147570) waits for the female's touch
+            // animation loop to reach normalizedTime >= 1f to transition out of
+            // the click state — and animBody.speed=0 makes that impossible.
+            // ForceFinish() is KK's own emergency-stop API: resets action=none,
+            // clears useItems[], stops contact SE.
+            ForceFinishHands();
+
             // 4e2. Issue 1+5: per-character neck-look freeze (skipCalc) + head bone snapshot.
             FreezeNeckLook();
             Plugin.LogI($"  step4e2 neck-look frozen on {_savedSkipCalc.Count} subject(s) headPins={_pinnedHeadRots.Count}");
@@ -472,6 +481,7 @@ namespace KK_ZaWarudo
             DisableBlink();
             FreezeNeckLook();
             SnapshotAndPinFace();
+            ForceFinishHands(); // F11: clear any grab the partner switch may have started
             if (_flags != null) _flags.speedCalc = 0f;
 
             // Animator: either pin immediately, or run a transition window first
@@ -744,6 +754,30 @@ namespace KK_ZaWarudo
             Plugin.LogI($"  climax face applied to {applied} female(s) eye={eye} mouth={mouth} brow={eyebrow} tears={tears}");
         }
 
+        /// <summary>
+        /// F11: cleanly release any active hand grab via the game's own ForceFinish.
+        /// Called from Freeze() and ReapplyIfFrozen() to make sure no grab is left
+        /// dangling in a state our animator freeze would lock up.
+        /// </summary>
+        private void ForceFinishHands()
+        {
+            int finished = 0;
+            foreach (var h in new[] { _hand0, _hand1 })
+            {
+                if (h == null) continue;
+                try
+                {
+                    if (h.action != HandCtrl.HandAction.none)
+                    {
+                        h.ForceFinish();
+                        finished++;
+                    }
+                }
+                catch (System.Exception e) { Plugin.LogW($"  ForceFinishHands failed: {e.Message}"); }
+            }
+            Plugin.LogI($"  step4e1 hands force-finished={finished}");
+        }
+
         private void StopFemaleVoices()
         {
             if (_flags == null) return;
@@ -798,8 +832,13 @@ namespace KK_ZaWarudo
                     var elapsed = Time.realtimeSinceStartup - _freezeStartTime;
                     var delta = elapsed * Plugin.AccumulationRate.Value;
                     var before = _flags.gaugeFemale;
-                    _flags.gaugeFemale = Mathf.Min(100f, before + delta);
-                    Plugin.LogI($"Gauge {before:F1} → {_flags.gaugeFemale:F1} (+{delta:F1} over {elapsed:F1}s).");
+                    var cap = Plugin.AccumulationCap.Value;
+                    // Cap only applies as a ceiling for the INJECTED value — never
+                    // pulls the gauge DOWN if it's already above the cap.
+                    var target = Mathf.Min(100f, before + delta);
+                    if (before < cap) target = Mathf.Min(target, cap);
+                    _flags.gaugeFemale = target;
+                    Plugin.LogI($"Gauge {before:F1} → {_flags.gaugeFemale:F1} (+{delta:F1} over {elapsed:F1}s, cap={cap:F0}).");
                     break;
             }
         }

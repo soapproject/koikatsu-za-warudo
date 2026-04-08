@@ -41,6 +41,7 @@ namespace KK_ZaWarudo
         internal static ConfigEntry<float> ToggleCooldown;
         internal static ConfigEntry<ResumeMode> Mode;
         internal static ConfigEntry<float> AccumulationRate;
+        internal static ConfigEntry<float> AccumulationCap;
         internal static ConfigEntry<bool> ClimaxFaceOnResume;
         internal static ConfigEntry<int> ClimaxEyesPtn;
         internal static ConfigEntry<int> ClimaxMouthPtn;
@@ -85,8 +86,13 @@ namespace KK_ZaWarudo
                 "Instant = jam female gauge to 100 on resume. Accumulated = add (duration * rate).");
 
             AccumulationRate = Config.Bind("General", "Accumulation Rate",
-                10f,
-                new ConfigDescription("Gauge points per second of frozen time (Accumulated mode only).",
+                2f,
+                new ConfigDescription("Gauge points per second of frozen time (Accumulated mode only). Default 2 means a 10s freeze adds 20 gauge — gentle. Crank to 10+ if you want freezes to ramp up gauge fast.",
+                    new AcceptableValueRange<float>(0f, 100f)));
+
+            AccumulationCap = Config.Bind("General", "Accumulation Cap",
+                65f,
+                new ConfigDescription("Hard ceiling for the gauge value Resume can inject up to (Accumulated mode only). Defaults to 65 — just below the 70 orgasm threshold — so you can't accidentally trigger an orgasm by holding a long freeze. Set to 100 to disable the cap.",
                     new AcceptableValueRange<float>(0f, 100f)));
 
             ClimaxFaceOnResume = Config.Bind("Climax Face", "Enable",

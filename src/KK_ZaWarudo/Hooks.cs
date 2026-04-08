@@ -184,6 +184,69 @@ namespace KK_ZaWarudo
         }
 
         /// <summary>
+        /// F11 / F22 — Trick A: keep grab WORKING during freeze by teleporting
+        /// the touch action layer's normalizedTime past 1 so ClickAction's gate
+        /// (HandCtrl.cs:147570 `if (info.normalizedTime >= 1f)`) trips and the
+        /// click→drag transition completes naturally. Drag mode then handles
+        /// mouse-up via ForceFinish like normal.
+        ///
+        /// Verified offline:
+        ///   - `setAllLayerWeight` iterates `for (int i=1; i<layerCount; i++)`
+        ///     → layer 0 is master, layers 1+ are overlays.
+        ///   - HandCtrl uses separate `useItems[i].layerAction.body` and
+        ///     `layerIdle.body` indices, switching weight between them — both
+        ///     are non-zero. So teleporting the action layer doesn't move the
+        ///     master body pose.
+        ///
+        /// Postfix runs AFTER ClickAction has read the gate this frame. We
+        /// teleport so the NEXT frame's ClickAction sees normalizedTime >= 1.
+        /// </summary>
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(HandCtrl), "ClickAction")]
+        public static void ClickActionPost(HandCtrl __instance)
+        {
+            if (!Frozen()) return;
+            try
+            {
+                var trav = Traverse.Create(__instance);
+                int actionUseItem = trav.Field("actionUseItem").GetValue<int>();
+                if (actionUseItem < 0) return;
+                var useItems = trav.Field("useItems").GetValue<System.Array>();
+                if (useItems == null || actionUseItem >= useItems.Length) return;
+                var useItem = useItems.GetValue(actionUseItem);
+                if (useItem == null) return;
+
+                // Pull the LayerInfo + nLayer the same way ClickAction does
+                var layer = Traverse.Create(useItem).Field("layer").GetValue();
+                if (layer == null) return;
+                var layerActions = Traverse.Create(layer).Field("layerActions").GetValue<System.Array>();
+                if (layerActions == null || layerActions.Length < 2) return;
+                var actionLayer1 = layerActions.GetValue(1);
+                if (actionLayer1 == null) return;
+
+                var female = trav.Field("female").GetValue<ChaControl>();
+                var flags = trav.Field("flags").GetValue<HFlag>();
+                if (female == null || female.animBody == null || flags == null) return;
+                bool isFront = flags.nowAnimationInfo.paramFemale.lstFrontAndBehind[0] == 0;
+                var bodyLayer = isFront
+                    ? Traverse.Create(actionLayer1).Field("front").GetValue()
+                    : Traverse.Create(actionLayer1).Field("back").GetValue();
+                int nLayer = Traverse.Create(bodyLayer).Field("body").GetValue<int>();
+                if (nLayer <= 0) return; // safety: never touch layer 0
+
+                var info = female.animBody.GetCurrentAnimatorStateInfo(nLayer);
+                if (info.normalizedTime < 1f)
+                {
+                    // Teleport this single layer's state to normalizedTime = 1.
+                    // animBody.speed = 0 means the animator clock is paused, but
+                    // Animator.Play() with explicit normalizedTime forces position.
+                    female.animBody.Play(info.fullPathHash, nLayer, 1f);
+                }
+            }
+            catch (System.Exception e) { Plugin.LogW($"[trickA] ClickActionPost: {e.Message}"); }
+        }
+
+        /// <summary>
         /// Freeze the SIMULATION (not just the visuals). HSonyu/HHoushi/HAibu.Proc
         /// runs every frame, recomputes flags.speedCalc from Time.deltaTime, and
         /// calls flags.FemaleGaugeUp / MaleGaugeUp to tick the pleasure gauge.
