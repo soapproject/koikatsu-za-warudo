@@ -7,3 +7,7 @@ obj/
 *.user
 *.suo
 .vs/
+runtime_inspect/
+
+# Claude Code workspace settings (per-machine, may contain local paths and permissions)
+.claude/
