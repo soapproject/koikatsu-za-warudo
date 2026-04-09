@@ -244,13 +244,17 @@ public GameObject              objHead       { get; protected set; }
 public GameObject              objHeadBone   { get; protected set; }  // the actual head bone Transform parent
 ```
 
-To stop the neck look calculation **per character** (not type-level — that breaks pose):
+**To stop the neck look from rotating the head**, you have basically one option that actually works:
 ```csharp
-chaCtrl.neckLookCtrl.neckLookScript.skipCalc = true;   // set false to resume
+chaCtrl.neckLookCtrl.enabled = false;   // disables the Unity Behaviour, restore on resume
 ```
-This is what the game itself uses internally — see decompiled assembly line ~61642 (`SetEyesPtn(21)` mannequin path) and line ~30020.
+This is the only mechanism that's playtest-verified to stop the head rotation. Disabling the Component means Unity doesn't call its `LateUpdate`, so no neck bone writes happen at all.
 
-If a per-frame writer (animator residue, IK, constraint) keeps overwriting the head rotation despite `skipCalc=true`, snapshot `objHeadBone.transform.localRotation` and re-apply it from `Plugin.LateUpdate` every frame.
+**Things that LOOK like they should work but DON'T**:
+- ❌ `chaCtrl.neckLookCtrl.neckLookScript.skipCalc = true` — `skipCalc` is misnamed. `NeckUpdateCalc` line ~184083 has `if (!isEnabled || (!skipCalc && Time.deltaTime == 0f)) return;` which only early-returns when `!skipCalc && deltaTime==0`. Setting `skipCalc=true` makes the early-return condition `false`, so we continue past it. The bone rotation logic still runs. The only thing `skipCalc=true` does is line ~184267 `if (skipCalc) t = 1f;`, which forces the lerp factor to 1 (instant snap instead of smooth follow). KK uses it internally for the mannequin pose-snap path, NOT to stop tracking.
+- ❌ Setting `neckLookCtrl.target = null` — `LateUpdate` falls into the `_isUseBackUpPos` branch and still calls `NeckUpdateCalc`, which still rotates the bone toward the backed-up position.
+- ❌ Snapshotting `objHeadBone.transform.localRotation` and re-pinning it from a Plugin LateUpdate — Unity's script execution order isn't guaranteed to put your LateUpdate after `NeckLookControllerVer2.LateUpdate`, so the writer can win the race.
+- ⚠️ Type-level Harmony prefix on `NeckLookControllerVer2.LateUpdate` returning false — works to stop the bone writes but causes the head to snap to the bind pose (rest pose) at freeze moment, because some other writer (animator) is resetting it and our LateUpdate-skip prevents the look-at restore. Symptom = "head jumps to default pose on freeze". The per-instance Component disable does NOT have this problem because... TBD experimentally why. (If you observe the bind-pose snap with the component-disable approach too, you'll need to add a same-frame re-rotation of the neck bone to its pre-freeze world rotation.)
 
 ### `HandCtrl` — grab pipeline + activity signals
 

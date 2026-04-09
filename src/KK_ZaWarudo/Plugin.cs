@@ -247,13 +247,10 @@ namespace KK_ZaWarudo
             }
         }
 
-        // Issue 1+5: re-pin frozen subjects' head bone localRotation after every
-        // LateUpdate, so any system that overwrites it (residual animator/IK/constraint)
-        // gets immediately reverted to the snapshot taken at freeze time.
-        private void LateUpdate()
-        {
-            TimeStopController.Instance?.PinHeadRotationsLate();
-        }
+        // (LateUpdate head-pin removed — replaced by disabling the
+        // NeckLookControllerVer2 Component itself in TimeStopController.FreezeNeckLook.
+        // Disabling the behaviour stops Unity from calling its LateUpdate, so there's
+        // no writer to fight, and no per-frame pinning needed.)
 
         private void Update()
         {

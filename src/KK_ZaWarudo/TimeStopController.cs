@@ -205,12 +205,11 @@ namespace KK_ZaWarudo
         private readonly Dictionary<ParticleSystem, bool> _suppressedEmission = new Dictionary<ParticleSystem, bool>();
         private readonly HashSet<AudioSource> _pausedAudio = new HashSet<AudioSource>();
         private readonly Dictionary<ChaControl, bool> _savedBlinkFlags = new Dictionary<ChaControl, bool>();
-        // Issue 1+5: snapshot per-character neck-look state and head bone rotation,
-        // restore on resume. Using neckLookScript.skipCalc (the in-game flag) plus
-        // a Transform localRotation snapshot prevents the head snapping to a default
-        // pose at the moment of freeze, and stops "head moves on its own" mid-freeze.
-        private readonly Dictionary<NeckLookCalcVer2, bool> _savedSkipCalc = new Dictionary<NeckLookCalcVer2, bool>();
-        private readonly Dictionary<Transform, Quaternion> _pinnedHeadRots = new Dictionary<Transform, Quaternion>();
+        // Cache of disabled NeckLookControllerVer2 Components per subject. Disabling
+        // the Behaviour stops Unity from calling its LateUpdate → no bone writes.
+        // (Earlier attempts via skipCalc and head bone localRotation pinning both
+        // failed; see FreezeNeckLook comment for the why.)
+        private readonly Dictionary<NeckLookControllerVer2, bool> _savedNeckLookEnabled = new Dictionary<NeckLookControllerVer2, bool>();
         // F8: capture in-progress face per character on freeze and re-apply every
         // ReapplyIfFrozen call so an in-progress ahegao isn't reverted to default.
         private struct FaceState { public int eyes; public int mouth; public int eyebrow; public byte tears; public float eyesOpen; }
@@ -359,9 +358,10 @@ namespace KK_ZaWarudo
             // clears useItems[], stops contact SE.
             ForceFinishHands();
 
-            // 4e2. Issue 1+5: per-character neck-look freeze (skipCalc) + head bone snapshot.
+            // 4e2. Disable NeckLookControllerVer2 Behaviour per subject — Unity stops
+            // calling its LateUpdate so the head bone is never written.
             FreezeNeckLook();
-            Plugin.LogI($"  step4e2 neck-look frozen on {_savedSkipCalc.Count} subject(s) headPins={_pinnedHeadRots.Count}");
+            Plugin.LogI($"  step4e2 NeckLookControllerVer2 disabled on {_savedNeckLookEnabled.Count} subject(s)");
 
             // 4e3. KK in-game tracking toggles — cache + force false. The game
             // exposes these as user-facing settings ("Female eyes track camera",
@@ -674,11 +674,26 @@ namespace KK_ZaWarudo
         }
 
         /// <summary>
-        /// Issue 1 + 5 (head): stop the neck-look calculation per character via the
-        /// in-game `neckLookScript.skipCalc` flag (KK uses this internally — see
-        /// decompiled line 61642). Also snapshot the current head bone localRotation
-        /// so a parallel coroutine can re-pin it each LateUpdate, in case some
-        /// other system writes to it after we set skipCalc.
+        /// Stop neck-look bone writes by DISABLING the NeckLookControllerVer2
+        /// Component itself. This is the only mechanism that actually works:
+        ///
+        /// - `neckLookScript.skipCalc = true` does NOT skip the bone rotation —
+        ///   it only changes the lerp factor `t` to 1 (instant snap instead of
+        ///   smooth follow). The neck bone is still rotated every frame to face
+        ///   the target. Verified at decompiled line 184267 (`if (skipCalc) t = 1f`)
+        ///   and 184083 (the NeckUpdateCalc early-return only fires when
+        ///   `!isEnabled || (!skipCalc && deltaTime==0)` — skipCalc=true skips
+        ///   the early-return, doesn't trigger it).
+        ///
+        /// - Setting `target = null` falls into a `_isUseBackUpPos` branch that
+        ///   still calls `NeckUpdateCalc`, still writes the bone.
+        ///
+        /// - Snapshotting the head bone `localRotation` and re-pinning in
+        ///   Plugin.LateUpdate doesn't reliably work because of script execution
+        ///   order (NeckLookControllerVer2.LateUpdate may run AFTER our pin).
+        ///
+        /// Disabling the Behaviour means Unity skips its LateUpdate entirely → no
+        /// bone writes → bone stays at whatever value it had at freeze moment.
         /// </summary>
         private void FreezeNeckLook()
         {
@@ -686,46 +701,26 @@ namespace KK_ZaWarudo
             {
                 try
                 {
-                    if (c.neckLookCtrl != null && c.neckLookCtrl.neckLookScript != null)
-                    {
-                        var calc = c.neckLookCtrl.neckLookScript;
-                        if (!_savedSkipCalc.ContainsKey(calc))
-                            _savedSkipCalc[calc] = calc.skipCalc;
-                        calc.skipCalc = true;
-                    }
-                    var head = c.objHeadBone != null ? c.objHeadBone.transform : null;
-                    if (head != null && !_pinnedHeadRots.ContainsKey(head))
-                        _pinnedHeadRots[head] = head.localRotation;
+                    var ctrl = c.neckLookCtrl;
+                    if (ctrl == null) continue;
+                    if (_savedNeckLookEnabled.ContainsKey(ctrl)) continue;
+                    _savedNeckLookEnabled[ctrl] = ctrl.enabled;
+                    ctrl.enabled = false;
                 }
                 catch (System.Exception e) { Plugin.LogW($"  FreezeNeckLook failed on {c.name}: {e.Message}"); }
             }
         }
 
-        /// <summary>Restore the cached skipCalc flags and clear the head pin set.</summary>
+        /// <summary>Re-enable the neck-look Components we disabled on freeze.</summary>
         private void RestoreNeckLook()
         {
             int restored = 0;
-            foreach (var kv in _savedSkipCalc)
+            foreach (var kv in _savedNeckLookEnabled)
             {
-                if (kv.Key != null) { kv.Key.skipCalc = kv.Value; restored++; }
+                if (kv.Key != null) { kv.Key.enabled = kv.Value; restored++; }
             }
-            _savedSkipCalc.Clear();
-            _pinnedHeadRots.Clear();
-            Plugin.LogI($"  neck-look skipCalc restored on {restored} subject(s)");
-        }
-
-        /// <summary>
-        /// Plugin.LateUpdate calls this every frame while frozen — re-applies the
-        /// snapshotted head localRotation in case any LateUpdate writer overwrote it.
-        /// Cheap (Dictionary iteration) and idempotent.
-        /// </summary>
-        public void PinHeadRotationsLate()
-        {
-            if (!_frozen) return;
-            foreach (var kv in _pinnedHeadRots)
-            {
-                if (kv.Key != null) kv.Key.localRotation = kv.Value;
-            }
+            _savedNeckLookEnabled.Clear();
+            Plugin.LogI($"  NeckLookControllerVer2 enabled restored on {restored} subject(s)");
         }
 
         /// <summary>
