@@ -247,10 +247,21 @@ namespace KK_ZaWarudo
             }
         }
 
-        // (LateUpdate head-pin removed — replaced by disabling the
-        // NeckLookControllerVer2 Component itself in TimeStopController.FreezeNeckLook.
-        // Disabling the behaviour stops Unity from calling its LateUpdate, so there's
-        // no writer to fight, and no per-frame pinning needed.)
+        // Re-pin neck-chain bone rotations every LateUpdate while frozen.
+        // NeckLookControllerVer2 is disabled (see TimeStopController.FreezeNeckLook),
+        // so there's no LateUpdate writer competing with us — only the animator,
+        // which runs in Animate stage BEFORE LateUpdate. Our write here is the
+        // last word for the frame.
+        //
+        // Without this, the head appears to "reset to a default position" on freeze
+        // because the animator's WLoop neck pose (without NeckLook's camera-track
+        // overlay) becomes visible. The pin reapplies the freeze-moment rotation
+        // (which IS the camera-tracked one from NeckLook's last LateUpdate before
+        // we disabled it).
+        private void LateUpdate()
+        {
+            TimeStopController.Instance?.PinNeckBonesLate();
+        }
 
         private void Update()
         {

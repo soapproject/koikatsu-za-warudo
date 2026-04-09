@@ -206,10 +206,15 @@ namespace KK_ZaWarudo
         private readonly HashSet<AudioSource> _pausedAudio = new HashSet<AudioSource>();
         private readonly Dictionary<ChaControl, bool> _savedBlinkFlags = new Dictionary<ChaControl, bool>();
         // Cache of disabled NeckLookControllerVer2 Components per subject. Disabling
-        // the Behaviour stops Unity from calling its LateUpdate → no bone writes.
-        // (Earlier attempts via skipCalc and head bone localRotation pinning both
-        // failed; see FreezeNeckLook comment for the why.)
+        // the Behaviour stops Unity from calling its LateUpdate → no NeckLook writes.
+        // But the animator still writes the base WLoop neck pose every frame, so
+        // we ALSO snapshot each neck-chain bone's localRotation at freeze moment
+        // (which IS the NeckLook-overridden value from the previous LateUpdate)
+        // and re-pin them every Plugin.LateUpdate. With NeckLookControllerVer2
+        // disabled there's no script-execution-order race anymore — only the
+        // animator writes, and animator runs in Animate stage (before LateUpdate).
         private readonly Dictionary<NeckLookControllerVer2, bool> _savedNeckLookEnabled = new Dictionary<NeckLookControllerVer2, bool>();
+        private readonly Dictionary<Transform, Quaternion> _pinnedNeckBones = new Dictionary<Transform, Quaternion>();
         // F8: capture in-progress face per character on freeze and re-apply every
         // ReapplyIfFrozen call so an in-progress ahegao isn't reverted to default.
         private struct FaceState { public int eyes; public int mouth; public int eyebrow; public byte tears; public float eyesOpen; }
@@ -704,6 +709,23 @@ namespace KK_ZaWarudo
                     var ctrl = c.neckLookCtrl;
                     if (ctrl == null) continue;
                     if (_savedNeckLookEnabled.ContainsKey(ctrl)) continue;
+
+                    // Snapshot every bone in the neck chain BEFORE disabling — these
+                    // values are the NeckLook-overridden rotations from the previous
+                    // LateUpdate (camera-tracked). Once disabled, the animator's base
+                    // WLoop pose would otherwise win every frame, which the user sees
+                    // as the head "resetting" to a default position.
+                    var calc = ctrl.neckLookScript;
+                    if (calc != null && calc.aBones != null)
+                    {
+                        foreach (var b in calc.aBones)
+                        {
+                            if (b == null || b.neckBone == null) continue;
+                            if (!_pinnedNeckBones.ContainsKey(b.neckBone))
+                                _pinnedNeckBones[b.neckBone] = b.neckBone.localRotation;
+                        }
+                    }
+
                     _savedNeckLookEnabled[ctrl] = ctrl.enabled;
                     ctrl.enabled = false;
                 }
@@ -711,7 +733,22 @@ namespace KK_ZaWarudo
             }
         }
 
-        /// <summary>Re-enable the neck-look Components we disabled on freeze.</summary>
+        /// <summary>
+        /// Plugin.LateUpdate calls this every frame while frozen — re-applies the
+        /// snapshotted neck-chain localRotations after the animator has written its
+        /// own base pose. NeckLookControllerVer2 is disabled, so there's no other
+        /// LateUpdate writer to race with.
+        /// </summary>
+        public void PinNeckBonesLate()
+        {
+            if (!_frozen) return;
+            foreach (var kv in _pinnedNeckBones)
+            {
+                if (kv.Key != null) kv.Key.localRotation = kv.Value;
+            }
+        }
+
+        /// <summary>Re-enable the neck-look Components we disabled on freeze, drop bone pin set.</summary>
         private void RestoreNeckLook()
         {
             int restored = 0;
@@ -720,6 +757,7 @@ namespace KK_ZaWarudo
                 if (kv.Key != null) { kv.Key.enabled = kv.Value; restored++; }
             }
             _savedNeckLookEnabled.Clear();
+            _pinnedNeckBones.Clear();
             Plugin.LogI($"  NeckLookControllerVer2 enabled restored on {restored} subject(s)");
         }
 
