@@ -38,6 +38,9 @@ Pitfalls hit during development, risks found in audits, playtest feedback, and u
 | F20 | Speed/auto/alternate UI works in free H **only if auto mode was enabled before freeze** | ⏸ Same root as F10 main, key insight noted |
 | F21 | Right-click alternate position: male moves to new position, female doesn't | ✅ Animator transition window — `ReapplyIfFrozen` now lets female animator run briefly (poll until target state has actually started, bound by 1s timeout) before re-pinning. Other locks stay engaged through the window. (verify) |
 | F22 | Can't grab / touch the female during freeze | 🔬 Same fix as F11 (Trick B — transpile the `>= 1f` gate). Verify: clicking on body during freeze should grab + register without getting stuck, and mouse-up should release naturally via KK's own `DragAction → ForceFinish`. |
+| F23 | Female body visibly moves during freeze, worse above 70% gauge | ✅ Round 4: zero `animBody`'s blend tree parameters (`speed`/`motion`/`motion1`) every Plugin.LateUpdate. HSonyu.LateProc writes these each frame from `flags.speed` (which ramps up at gauge >= 70); blend tree samples them per render even when `animBody.speed = 0` stops state time. Re-pinning the params to 0 holds the sampled pose. |
+| F24 | Ahegao face overwritten each frame during freeze (same root as F6) | ✅ Round 4: **actually shipped F6** — prefix patches on `FaceListCtrl.OpenCtrl(ChaControl)` and `HVoiceCtrl.OpenCtrl(ChaControl, int)`. Round-2 analysis was correct but the code was never committed; round-4 playtest log proves it was the culprit. |
+| F25 | Instant mode jumps gauge straight to 100, ignores cap | ✅ Round 4: cap applied to Instant too — `target = before >= cap ? before : cap` instead of hardcoded 100. Long freeze + Instant mode can no longer trigger orgasm on resume. |
 
 Bug fixes from earlier audits (B-series) are below the F-series.
 
@@ -83,7 +86,25 @@ Will ship in the next round, paired with F6.
 ### F5 — Boop plugin didn't work during freeze ✅ (auto-fixed by F7, needs verify)
 Reading Boop's source ([Boop.Core/Boop.cs](../references/KK_Plugins/src/Boop.Core/Boop.cs)): it only patches `DynamicBone.SetupParticles` (postfix) to register bones, then runs its own `Update()` that reads mouse position and calls `db.ApplyForce(f)`. No `HandCtrl` hook, no animator dependency. Boop was failing in v0.1 because we previously DISABLED every `DynamicBone` in `FreezeFemaleBones` — disabled components don't simulate, so applied forces did nothing. F7's no-op fix means DynamicBones now stay live during freeze, so Boop's `ApplyForce` should work again. **Verify in playtest.**
 
-### F6 — Touching the female changes her expression even during freeze 🔍
+### Compatibility issues (playtest round 4)
+
+Tester reports these plugins cause visible leakage during freeze. Sources now in `references/`:
+- **KK_FixationalEyeMovementVR** ([references/KK_FixationalEyeMovementVR/](../references/KK_FixationalEyeMovementVR/)) — VR-only. Adds a `FixationalEyeMovementVRController` MonoBehaviour to each female on `VRHScene.MapSameObjectDisable` postfix. The controller runs an infinite `EyeShake` coroutine that writes `leftEye.transform.localRotation` / `rightEye.transform.localRotation` every 0.1–0.8s using `WaitForSecondsRealtime` (real time, so `timeScale=0` / `speed=0` don't stop it). Our `EyeLookController.LateUpdate` prefix doesn't catch it because this is a separate Component writing the eye bone Transform directly. **Fix path**: find the `FixationalEyeMovementVRController` component on each frozen subject via `AccessTools.TypeByName("FixationalEyeMovementVRController")`, cache + disable. Or `StopAllCoroutines()` on the owning VRHScene (risky — kills other plugins' coroutines too). Deferred.
+- **Sabakan/CyuNoVR** ([references/CyuNoVR/](../references/CyuNoVR/)) — Non-VR kissing plugin despite the name. Hooks `FaceBlendShape.LateUpdate` postfix, writes `ChangeMouthPtn` directly, and has its own Update methods. Our face freeze doesn't cover its paths. Tester reports mouth keeps animating during freeze. **Fix path**: prefix-skip its Update methods when frozen. Deferred.
+- **Sabakan/SlapMod** ([references/SlapMod/](../references/SlapMod/)) — Queues NPC reaction animation on hit, locks character from further actions during freeze. **Fix path**: probably prefix-skip `SlapMod`'s `JudgeProcHook` / `HandCtrl` hook when frozen so the slap doesn't queue. Deferred.
+
+All three are **third-party plugin compatibility** — we can fix them with narrow plugin-specific prefix-skip patches, but they're lower priority than core functionality. Tracked here for the next compat round.
+
+### F6 — Touching the female changes her expression even during freeze ✅ (real ship, round 4)
+**Diagnosed in round 2**, claimed "patch ready next round" in NOTES, but the actual Harmony patch was **never added to Hooks.cs**. Round 4 playtest confirmed ahegao is being overwritten → checked source → confirmed missing code. **Now actually shipped**: two prefix patches:
+1. `FaceListCtrl.OpenCtrl(ChaControl)` — called from `HSceneProc.Update` via `face.SafeProc`
+2. `HVoiceCtrl.OpenCtrl(ChaControl, int)` — called from `HVoiceCtrl.Proc`'s own female iteration loop (unconditional, runs after VoiceProc/BreathProc)
+
+Both write `ChangeEyesOpenMax` / `mouthCtrl.OpenMin`. `FaceListCtrl.OpenCtrl` is manually patched via `AccessTools.TypeByName` in `Hooks.Apply()` because `FaceListCtrl` inherits from Sirenix's `SerializedMonoBehaviour` and we don't want to add a Sirenix csproj reference.
+
+**Lesson (added to dev rules)**: "patch ready, shipping next round" is a lie — if you don't ship it in the same commit the analysis was written, the code and the docs drift. From now on, any fix that's diagnosed must be code-committed or explicitly marked `🔍 ANALYZED NOT YET CODED` in the status table.
+
+### F6 (original analysis — kept for reference) 🔍
 Root cause found, patch ready. The path is NOT through `HMotionEyeNeck.Proc`. `HSceneProc.Update` runs every frame and calls `face.SafeProc(f => f.OpenCtrl(female))`. `FaceListCtrl.OpenCtrl` then writes:
 - `female.ChangeEyesOpenMax(ans)` ← derived from `blendEye.Proc(ref ans)`
 - `female.mouthCtrl.OpenMin = ans2` ← from `blendMouth.Proc(ref ans2)`

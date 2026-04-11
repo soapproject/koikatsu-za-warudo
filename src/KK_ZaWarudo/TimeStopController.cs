@@ -748,6 +748,38 @@ namespace KK_ZaWarudo
             }
         }
 
+        /// <summary>
+        /// Plugin.LateUpdate companion — zero the blend tree parameters on each
+        /// frozen subject's animBody every frame. Background:
+        ///
+        /// `HSonyu.LateProc` (and sibling modes) writes `SetAnimatorFloat("speed", ...)`
+        /// and `SetAnimatorFloat("motion1", ...)` every LateUpdate from `flags.speed`
+        /// / `flags.motion1`. Unity's blend tree samples the pose based on these
+        /// parameters EVERY RENDER FRAME — even when `animBody.speed = 0` stops
+        /// state time advancement. So at `gaugeFemale >= 70` when `flags.speed`
+        /// ramps up, the blend tree picks a faster motion clip → body visibly
+        /// moves despite the animator clock being paused.
+        ///
+        /// Fix: re-zero the parameters after HSonyu.LateProc wrote them. Male
+        /// (protagonist) animator untouched so he still thrusts normally — only
+        /// the female's sampled pose gets held.
+        /// </summary>
+        public void PinBlendParamsLate()
+        {
+            if (!_frozen) return;
+            foreach (var c in FrozenSubjects())
+            {
+                if (c == null || c.animBody == null) continue;
+                try
+                {
+                    c.animBody.SetFloat("speed", 0f);
+                    c.animBody.SetFloat("motion", 0f);
+                    c.animBody.SetFloat("motion1", 0f);
+                }
+                catch { /* parameter may not exist on all builds/modes */ }
+            }
+        }
+
         /// <summary>Re-enable the neck-look Components we disabled on freeze, drop bone pin set.</summary>
         private void RestoreNeckLook()
         {
@@ -926,9 +958,16 @@ namespace KK_ZaWarudo
             switch (Plugin.Mode.Value)
             {
                 case ResumeMode.Instant:
-                    _flags.gaugeFemale = 100f;
-                    Plugin.LogI("Gauge → 100 (Instant).");
+                {
+                    var instBefore = _flags.gaugeFemale;
+                    var instCap = Plugin.AccumulationCap.Value;
+                    // Cap applies to both modes. If already above cap, leave alone.
+                    // If below, jump to cap (not 100), so a long freeze can't trigger
+                    // orgasm on resume even when Instant is selected.
+                    _flags.gaugeFemale = instBefore >= instCap ? instBefore : instCap;
+                    Plugin.LogI($"Gauge {instBefore:F1} → {_flags.gaugeFemale:F1} (Instant, cap={instCap:F0})");
                     break;
+                }
                 case ResumeMode.Accumulated:
                     var elapsed = Time.realtimeSinceStartup - _freezeStartTime;
                     var delta = elapsed * Plugin.AccumulationRate.Value;

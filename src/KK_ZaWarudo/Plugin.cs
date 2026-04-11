@@ -260,7 +260,10 @@ namespace KK_ZaWarudo
         // we disabled it).
         private void LateUpdate()
         {
-            TimeStopController.Instance?.PinNeckBonesLate();
+            var inst = TimeStopController.Instance;
+            if (inst == null) return;
+            inst.PinNeckBonesLate();
+            inst.PinBlendParamsLate();
         }
 
         private void Update()

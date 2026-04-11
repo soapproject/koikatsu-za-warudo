@@ -41,6 +41,30 @@ namespace KK_ZaWarudo
             {
                 Plugin.LogW($"VR ChangeAnimator patch skipped: {e.Message}");
             }
+
+            // F6: patch FaceListCtrl.OpenCtrl(ChaControl) manually to avoid adding
+            // a Sirenix reference to the csproj (FaceListCtrl inherits from
+            // Sirenix.OdinInspector.SerializedMonoBehaviour).
+            try
+            {
+                var faceType = AccessTools.TypeByName("FaceListCtrl");
+                if (faceType != null)
+                {
+                    var method = AccessTools.Method(faceType, "OpenCtrl", new[] { typeof(ChaControl) });
+                    if (method != null)
+                    {
+                        var prefix = new HarmonyMethod(AccessTools.Method(typeof(Hooks), nameof(FaceListCtrlOpenCtrlPre)));
+                        harmony.Patch(method, prefix: prefix);
+                        Plugin.LogI("Patched FaceListCtrl.OpenCtrl(ChaControl) — face writes blocked during freeze.");
+                    }
+                    else Plugin.LogW("[F6] FaceListCtrl.OpenCtrl(ChaControl) method not found — face snapshot overwrite will continue.");
+                }
+                else Plugin.LogW("[F6] FaceListCtrl type not found — face snapshot overwrite will continue.");
+            }
+            catch (Exception e)
+            {
+                Plugin.LogW($"FaceListCtrl.OpenCtrl patch skipped: {e.Message}");
+            }
         }
 
         /// <summary>
@@ -178,6 +202,38 @@ namespace KK_ZaWarudo
         [HarmonyPrefix]
         [HarmonyPatch(typeof(HSeCtrl), "Proc")]
         public static bool SeCtrlProcPre(ref bool __result)
+        {
+            if (Frozen()) { __result = true; return false; }
+            return true;
+        }
+
+        /// <summary>
+        /// F6 (real fix, round 4) — `HSceneProc.Update` calls `face.SafeProc(f => f.OpenCtrl(female))`
+        /// every frame, which writes `ChangeEyesOpenMax` / `mouthCtrl.OpenMin` /
+        /// `ChangeNipRate`. That bypasses our `HMotionEyeNeck.Proc` prefix and
+        /// overwrites the face snapshot from step 4f.
+        ///
+        /// Attached via manual AccessTools patch in Apply() because FaceListCtrl
+        /// inherits from Sirenix's `SerializedMonoBehaviour`, and we don't want
+        /// to add a Sirenix reference to the csproj just to get the Type literal.
+        /// </summary>
+        public static bool FaceListCtrlOpenCtrlPre(ref bool __result)
+        {
+            if (Frozen()) { __result = true; return false; }
+            return true;
+        }
+
+        /// <summary>
+        /// Second face writer — `HVoiceCtrl.OpenCtrl(ChaControl, int)` is called
+        /// from `HVoiceCtrl.Proc` (the top-level per-frame tick at line 140735)
+        /// for each female, writing `ChangeEyesOpenMax` and `mouthCtrl.OpenMin`.
+        /// Runs unconditionally after VoiceProc/ShortBreathProc/BreathProc — our
+        /// existing prefixes on those don't block this loop. Separate prefix
+        /// required for F6 completeness.
+        /// </summary>
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(HVoiceCtrl), nameof(HVoiceCtrl.OpenCtrl), new System.Type[] { typeof(ChaControl), typeof(int) })]
+        public static bool HVoiceCtrlOpenCtrlPre(ref bool __result)
         {
             if (Frozen()) { __result = true; return false; }
             return true;
