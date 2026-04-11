@@ -67,6 +67,37 @@ These map 1:1 to the bug postmortems in [`docs/NOTES.md`](../../../docs/NOTES.md
 12. **No absolute paths in committed files.** `<KK_DIR>` / `$KK_DIR` placeholder, or `.env.local` (gitignored).
 13. **`.claude/settings*.json` is gitignored. `.claude/skills/` is NOT** — share knowledge, hide personal config.
 14. **Research the API before refactoring.** Don't iterate fixes blindly — survey reference plugins and ilspy first. (Why this skill exists.)
+15. **Ship in the same commit as the analysis.** If you diagnose a fix but don't commit the code, the fix doesn't exist. F6 sat as "patch ready next round" in NOTES for **2 playtest rounds** before round-4 grep proved the Harmony patch was never added to `Hooks.cs`. Ahegao preservation was broken the whole time. Either: (a) write the code and commit it in the same round as the analysis, OR (b) mark the NOTES status as `🔍 ANALYZED NOT YET CODED` so the next session knows to audit. Never `🔍 Patch ready next round` or similar phrasing that implies it's done.
+16. **KK is Mono, not IL2CPP.** Do not confuse Il2Cpp tooling, templates, or APIs with our workflow. See the "Mono vs IL2CPP" section below.
+
+---
+
+## Mono vs IL2CPP — KK is Mono, stay in the Mono lane
+
+Unity games ship with one of two runtimes: **Mono** (old, JIT, open DLLs) or **IL2CPP** (newer, AOT-compiled to C++, game code lives in `GameAssembly.dll` + `global-metadata.dat`). The plugin-modding ecosystem is almost completely different for each:
+
+| | Mono (KK is here) | IL2CPP (NOT us) |
+|---|---|---|
+| Game code | `Koikatu_Data/Managed/Assembly-CSharp.dll` — standard .NET DLL | `GameAssembly.dll` (native C++) + `il2cpp_data/Metadata/global-metadata.dat` |
+| Decompile | `ilspycmd` / ILSpy directly | `Il2CppDumper` / `Il2CppInspector` first to recover metadata |
+| BepInEx | **5.x** (what we use) | **6.x Il2Cpp branch** (different API, different loader) |
+| Harmony | Patches IL at runtime (our workflow) | Il2Cpp-specific Harmony port; IL is compiled away, hooks use native detours |
+| Runtime type access | `typeof(Foo)` + reflection | Requires `Il2CppInterop` generated C# wrappers for every game type |
+| Plugin target framework | `net35` (our hard rule #1) | `netstandard2.1` or `net6.0` |
+| Plugin templates | `IllusionLibs.*` / `KKAPI` | `BepInEx.Unity.IL2CPP` / Il2Cpp template repos |
+
+**Both Koikatsu (KK) and Koikatsu Sunshine (KKS) are Mono-era Unity 5.6 / 2019.** Every API, every csproj reference, every Harmony patch in this plugin assumes Mono.
+
+**Consequence**: if a reference / tutorial / plugin template mentions any of these, it's for Il2Cpp and **does not apply here**:
+- `GameAssembly.dll`
+- `global-metadata.dat`
+- `Il2CppInterop`
+- `BepInEx.Unity.IL2CPP`
+- Unhollower-generated wrappers
+- `netstandard2.1` / `net6.0` target frameworks in a plugin csproj
+- A template that says "for IL2CPP games" / "Il2Cpp Unity"
+
+If you find a plugin or article that seems relevant but is Il2Cpp-targeted, **don't try to port it** — find a Mono equivalent. The ecosystems don't mix. (Example: [TonWonton/BepInEx_Il2CppPluginTemplate](https://github.com/TonWonton/BepInEx_Il2CppPluginTemplate) is a nice clean template but it's IL2CPP-only. Ignore for this project.)
 
 ---
 
