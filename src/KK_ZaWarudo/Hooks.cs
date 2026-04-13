@@ -133,6 +133,32 @@ namespace KK_ZaWarudo
         private static bool Frozen() => TimeStopController.Instance != null && TimeStopController.Instance.IsFrozen;
 
         /// <summary>
+        /// F24 final piece — `FaceBlendShape.LateUpdate` is the LAST blendshape
+        /// writer in the chain. It runs AFTER HMotionEyeNeck.Proc, FaceListCtrl.OpenCtrl,
+        /// and HVoiceCtrl.OpenCtrl (which we already prefix-skip). It calls:
+        ///   - BlinkCtrl.CalcBlink()
+        ///   - EyesCtrl.CalcBlend(num)    → interpolates eye blendshape weights
+        ///   - EyebrowCtrl.CalcBlend(num) → interpolates eyebrow weights
+        ///   - MouthCtrl.CalcBlend(voiceValue) → interpolates mouth based on voice state
+        ///
+        /// The `voiceValue` (set via `SetVoiceVaule(float)`) reflects current audio
+        /// intensity. During freeze, voice is muted but `voiceValue` may decay → mouth
+        /// closes → ahegao lost. Without this prefix, face expressions still change
+        /// during freeze based on `voiceValue` / speed thresholds.
+        ///
+        /// Prefix-skipping this method holds ALL face blendshapes at their freeze-moment
+        /// weights. Combined with our existing blink-disable (ChangeEyesBlinkFlag) and
+        /// face snapshot (step 4f), the face is now truly frozen.
+        /// </summary>
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(FaceBlendShape), "LateUpdate")]
+        public static bool FaceBlendShapeLateUpdatePre()
+        {
+            if (Frozen()) return false;
+            return true;
+        }
+
+        /// <summary>
         /// Freeze female face/expression/eye/neck. HMotionEyeNeckFemale.Proc is called
         /// every frame from HSceneProc and reads animator state to drive eyes/mouth/
         /// eyebrow/tears/neck-look-target. Without this prefix the female blinks,

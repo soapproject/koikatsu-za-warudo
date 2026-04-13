@@ -205,6 +205,15 @@ namespace KK_ZaWarudo
         private readonly Dictionary<ParticleSystem, bool> _suppressedEmission = new Dictionary<ParticleSystem, bool>();
         private readonly HashSet<AudioSource> _pausedAudio = new HashSet<AudioSource>();
         private readonly Dictionary<ChaControl, bool> _savedBlinkFlags = new Dictionary<ChaControl, bool>();
+        // Test 1 fix: disable FullBodyBipedIK (FinalIK) on each frozen subject's animBody.
+        // IK solver runs independently of the animator and writes bone rotations every
+        // frame to maintain contact constraints (e.g. female legs track male's position).
+        // Even with animBody.speed=0, the IK keeps adjusting the body → visible "micro-
+        // motion" during freeze. Disabling the Behaviour stops the solver.
+        // `ik = animBody.GetComponent<FullBodyBipedIK>()` — verified at decompiled
+        // line 89305 (MotionIK constructor).
+        private readonly Dictionary<Behaviour, bool> _savedIKEnabled = new Dictionary<Behaviour, bool>();
+
         // Cache of disabled NeckLookControllerVer2 Components per subject. Disabling
         // the Behaviour stops Unity from calling its LateUpdate → no NeckLook writes.
         // But the animator still writes the base WLoop neck pose every frame, so
@@ -368,6 +377,11 @@ namespace KK_ZaWarudo
             FreezeNeckLook();
             Plugin.LogI($"  step4e2 NeckLookControllerVer2 disabled on {_savedNeckLookEnabled.Count} subject(s)");
 
+            // 4e4. Disable FullBodyBipedIK (FinalIK) on each subject's animBody so
+            // the IK solver stops writing bone rotations to maintain contact constraints.
+            DisableIK();
+            Plugin.LogI($"  step4e4 FullBodyBipedIK disabled on {_savedIKEnabled.Count} subject(s)");
+
             // 4e3. KK in-game tracking toggles — cache + force false. The game
             // exposes these as user-facing settings ("Female eyes track camera",
             // "Female neck track camera"). Setting them false halts the camera-
@@ -466,8 +480,11 @@ namespace KK_ZaWarudo
             _savedBlinkFlags.Clear();
             Plugin.LogI($"  blink restored on {restoredBlink} subject(s)");
 
-            // Restore neck-look skipCalc (Issue 1+5)
+            // Restore neck-look (Issue 1+5)
             RestoreNeckLook();
+
+            // Restore IK (Test 1)
+            RestoreIK();
 
             // Restore EtcData camera-track toggles (step 4e3)
             if (_savedEtcCached)
@@ -552,6 +569,7 @@ namespace KK_ZaWarudo
             FreezeFemaleAudio();
             DisableBlink();
             FreezeNeckLook();
+            DisableIK();           // Test 1: cover newly-bound subjects' IK
             SnapshotAndPinFace();
             ForceFinishHands(); // F11: clear any grab the partner switch may have started
             if (_flags != null) _flags.speedCalc = 0f;
@@ -891,6 +909,44 @@ namespace KK_ZaWarudo
         /// Called from Freeze() and ReapplyIfFrozen() to make sure no grab is left
         /// dangling in a state our animator freeze would lock up.
         /// </summary>
+        /// <summary>
+        /// Test 1: disable FullBodyBipedIK on each frozen subject so the IK solver
+        /// stops writing bone rotations to maintain contact constraints. Without this,
+        /// the female's legs/hips micro-move to track the (unfrozen) male's position.
+        /// Uses reflection to avoid a hard dependency on RootMotion.FinalIK namespace.
+        /// </summary>
+        private void DisableIK()
+        {
+            foreach (var c in FrozenSubjects())
+            {
+                if (c == null || c.animBody == null) continue;
+                try
+                {
+                    // FullBodyBipedIK is a Behaviour attached to animBody's GameObject.
+                    // Get it by type name to avoid compile-time namespace dependency.
+                    var ikType = AccessTools.TypeByName("RootMotion.FinalIK.FullBodyBipedIK");
+                    if (ikType == null) continue;
+                    var ik = c.animBody.GetComponent(ikType) as Behaviour;
+                    if (ik == null || !ik.enabled) continue;
+                    if (_savedIKEnabled.ContainsKey(ik)) continue;
+                    _savedIKEnabled[ik] = ik.enabled;
+                    ik.enabled = false;
+                }
+                catch (System.Exception e) { Plugin.LogW($"  DisableIK failed on {c.name}: {e.Message}"); }
+            }
+        }
+
+        private void RestoreIK()
+        {
+            int restored = 0;
+            foreach (var kv in _savedIKEnabled)
+            {
+                if (kv.Key != null) { kv.Key.enabled = kv.Value; restored++; }
+            }
+            _savedIKEnabled.Clear();
+            if (restored > 0) Plugin.LogI($"  FullBodyBipedIK enabled restored on {restored} subject(s)");
+        }
+
         private void ForceFinishHands()
         {
             int finished = 0;
