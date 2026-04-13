@@ -923,8 +923,19 @@ namespace KK_ZaWarudo
                 try
                 {
                     // FullBodyBipedIK is a Behaviour attached to animBody's GameObject.
-                    // Get it by type name to avoid compile-time namespace dependency.
-                    var ikType = AccessTools.TypeByName("RootMotion.FinalIK.FullBodyBipedIK");
+                    // Lives in Assembly-CSharp-firstpass.dll (RootMotion.FinalIK namespace).
+                    // AccessTools.TypeByName can miss types in firstpass, so use
+                    // assembly-qualified Type.GetType as primary, fallback to scanning.
+                    var ikType = System.Type.GetType("RootMotion.FinalIK.FullBodyBipedIK, Assembly-CSharp-firstpass");
+                    if (ikType == null)
+                    {
+                        // Fallback: scan all loaded assemblies
+                        foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
+                        {
+                            ikType = asm.GetType("RootMotion.FinalIK.FullBodyBipedIK");
+                            if (ikType != null) break;
+                        }
+                    }
                     if (ikType == null) continue;
                     var ik = c.animBody.GetComponent(ikType) as Behaviour;
                     if (ik == null || !ik.enabled) continue;
